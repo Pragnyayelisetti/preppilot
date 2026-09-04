@@ -1,61 +1,22 @@
-:root {
-  --ink: #12172B;
-  --surface: #1B2140;
-  --surface-raised: #232A4D;
-  --border: #2E355C;
-  --text-primary: #F5F3ED;
-  --text-secondary: #8B93A7;
-  --accent: #FFB648;
-  --accent-dim: #4A3F26;
-  --success: #4ADE80;
-  --urgent: #FF6B5B;
+@import "tailwindcss";
 
-  --font-display: 'Fraunces', serif;
-  --font-body: 'IBM Plex Sans', sans-serif;
-  --font-data: 'IBM Plex Mono', monospace;
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
 }
 
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--ink);
-  color: var(--text-primary);
-  font-family: var(--font-body);
-  -webkit-font-smoothing: antialiased;
+/* Custom scrollbar and subtle lighting utilities */
+::-webkit-scrollbar {
+  width: 8px;
 }
-
-body {
-  background-image:
-    radial-gradient(ellipse 800px 500px at 15% -10%, rgba(255, 182, 72, 0.08), transparent),
-    radial-gradient(ellipse 600px 400px at 90% 10%, rgba(74, 222, 128, 0.05), transparent);
-  background-attachment: fixed;
+::-webkit-scrollbar-track {
+  background: #020617;
 }
-
-a { color: inherit; }
-
-button {
-  font-family: var(--font-body);
-  cursor: pointer;
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
 }
-
-::selection {
-  background: var(--accent);
-  color: var(--ink);
-}
-
-*:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.container {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 32px;
-}
-
-@media (max-width: 640px) {
-  .container { padding: 0 20px; }
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }
