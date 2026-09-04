@@ -30,3 +30,30 @@
 .navbar-links a:hover {
   color: var(--text-primary);
 }
+
+.login-link {
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  transition: color 0.2s ease;
+}
+
+.login-link:hover {
+  color: var(--accent);
+}
+
+.signup-button {
+  text-decoration: none;
+  background: var(--accent);
+  color: #111;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.signup-button:hover {
+  transform: translateY(-1px);
+  opacity: 0.9;
+}

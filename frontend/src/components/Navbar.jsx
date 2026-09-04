@@ -1,14 +1,35 @@
 import './Navbar.css'
+import { Link } from 'react-router-dom'
 
 export default function Navbar() {
   return (
     <nav className="navbar">
       <div className="container navbar-inner">
-        <div className="navbar-logo">PrepPilot</div>
+
+        <Link to="/" className="navbar-logo">
+          PrepPilot
+        </Link>
+
         <div className="navbar-links">
-          <a href="#dashboard">Dashboard</a>
-          <a href="#how">How it works</a>
+
+          <Link to="/dashboard">
+            Dashboard
+          </Link>
+
+          <a href="#how">
+            How it works
+          </a>
+
+          <Link to="/login" className="login-link">
+            Login
+          </Link>
+
+          <Link to="/signup" className="signup-button">
+            Sign Up
+          </Link>
+
         </div>
+
       </div>
     </nav>
   )
