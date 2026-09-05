@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 
 class StudentProfile(BaseModel):
@@ -13,7 +13,7 @@ class StudentProfile(BaseModel):
 
 class ExtractedOpportunity(BaseModel):
     is_opportunity: bool
-    category: Optional[str] = None          # internship / placement / hackathon / scholarship
+    category: Optional[str] = None          # internship / placement / hackathon / scholarship / competition
     company_or_org: Optional[str] = None
     role_or_title: Optional[str] = None
     status: Optional[str] = None            # applied / shortlisted / interview / assessment / rejected / new

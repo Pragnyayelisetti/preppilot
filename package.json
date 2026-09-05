@@ -1,0 +1,13 @@
+{
+  "name": "preppilot",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend -- --host 0.0.0.0 --port 3000",
+    "build": "npm run build --workspace=frontend && cp -r frontend/dist ./dist",
+    "lint": "npm run build --workspace=frontend",
+    "preview": "npm run preview --workspace=frontend -- --host 0.0.0.0 --port 3000"
+  }
+}

@@ -11,12 +11,13 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_whatsapp_from: str = "whatsapp:+14155238886"
-    student_whatsapp_to: str = ""
+    student_whatsapp_to: str = "+919876543210"
 
     mongo_uri: str = ""
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()
