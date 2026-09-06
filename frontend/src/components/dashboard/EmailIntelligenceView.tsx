@@ -30,7 +30,7 @@ import {
   clearStoredAuth,
   getConnectedEmail,
   requestGoogleGmailAccess,
-  syncRealGmailInbox,
+  syncInboxViaBackend,
   fetchGmailProfile,
 } from '../../services/gmailOAuthService';
 
@@ -149,10 +149,10 @@ export const EmailIntelligenceView: React.FC<EmailIntelligenceViewProps> = ({
     }
 
     setIsSyncing(true);
-    setStatusMessage({ type: 'info', text: 'Scanning inbox for recruitment, interview, and hackathon emails...' });
+    setStatusMessage({ type: 'info', text: 'Sending inbox to PrepPilot AI for analysis...' });
 
     try {
-      const result = await syncRealGmailInbox(token, 15);
+      const result = await syncInboxViaBackend(token, 15, false);
       setEmails(result.emails);
       setConnectedEmail(result.emailAddress);
       setStatusMessage({

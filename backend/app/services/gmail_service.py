@@ -13,6 +13,7 @@ import base64
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import List, Dict, Any, Optional
 from app.config import settings
 
