@@ -390,7 +390,153 @@ function analyzeEmailContent(
 }
 
 /**
+ * ---------------------------------------------------------------------------
+ * BACKEND-POWERED SYNC (recommended)
+ * ---------------------------------------------------------------------------
+ * Sends the Google access token to our FastAPI backend, which fetches the
+ * inbox server-side and runs every email through the Groq LLM pipeline
+ * (classification + fit-scoring + prep-plan generation) instead of the
+ * basic keyword matching in analyzeEmailContent() above.
+ *
+ * Set VITE_BACKEND_URL in frontend/.env if your backend isn't on localhost:8000.
+ */
+const BACKEND_BASE_URL = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/$/, '');
+
+interface BackendOpportunity {
+  is_opportunity: boolean;
+  category?: string | null;
+  company_or_org?: string | null;
+  role_or_title?: string | null;
+  status?: string | null;
+  deadline_or_event_date?: string | null;
+  days_remaining?: number | null;
+  eligibility?: string | null;
+  required_skills?: string[];
+  match_score?: number | null;
+  focus_areas?: string[];
+  todays_task?: string | null;
+  raw_summary?: string | null;
+}
+
+const VALID_OPP_TYPES: Opportunity['type'][] = ['internship', 'hackathon', 'placement', 'scholarship'];
+
+function mapToOpportunity(bo: BackendOpportunity, index: number): Opportunity {
+  const type = VALID_OPP_TYPES.includes((bo.category || '') as Opportunity['type'])
+    ? (bo.category as Opportunity['type'])
+    : 'internship';
+  const score = bo.match_score ?? 0;
+
+  return {
+    id: `opp-live-${Date.now()}-${index}`,
+    title: bo.role_or_title || 'Opportunity Update',
+    company: bo.company_or_org || 'Unknown Organization',
+    type,
+    location: 'Verified via Gmail Inbox',
+    stipendOrPrize: 'Competitive / Industry Standard',
+    deadline: bo.days_remaining != null ? `In ${bo.days_remaining} days` : (bo.deadline_or_event_date || 'TBD'),
+    matchScore: score,
+    eligibilityStatus: score >= 70 ? 'Eligible' : score >= 40 ? 'Borderline' : 'Action Needed',
+    eligibilityCriteria: [
+      { label: 'Eligibility', status: 'pass', detail: bo.eligibility || 'Not specified in email' },
+      { label: 'AI Fit Score', status: score >= 60 ? 'pass' : 'warning', detail: `${score}% match to your profile` },
+    ],
+    skillsMatched: bo.required_skills || [],
+    skillsMissing: [],
+    roadmapSnapshot: {
+      day: 1,
+      totalDays: bo.days_remaining ?? 7,
+      currentFocus: bo.focus_areas?.[0] || 'General Preparation',
+      tasksRemaining: bo.focus_areas?.length || 1,
+      activeTask: bo.todays_task || 'Review the opportunity details and requirements',
+    },
+    aiSuggestion: bo.todays_task || 'Track this opportunity and revisit as the deadline nears.',
+    badge: (bo.status || 'NEW').toUpperCase(),
+  };
+}
+
+function mapToEmailLog(bo: BackendOpportunity, index: number): EmailLog {
+  const now = new Date();
+  return {
+    id: `email-live-${Date.now()}-${index}`,
+    sender: bo.company_or_org
+      ? `careers@${bo.company_or_org.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`
+      : 'unknown@sender.com',
+    subject: bo.role_or_title || bo.raw_summary || 'Opportunity update',
+    snippet: bo.raw_summary || 'Analyzed by PrepPilot backend.',
+    timestamp: now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    type: bo.is_opportunity ? 'opportunity' : 'promotional',
+    stage: bo.status || undefined,
+    extractedCompany: bo.company_or_org || undefined,
+    confidenceScore: bo.match_score ?? 90,
+  };
+}
+
+/**
+ * Calls YOUR backend's /api/sync-inbox with the Google access token.
+ * This is the function EmailIntelligenceView should use instead of
+ * syncRealGmailInbox() for real, LLM-powered results.
+ */
+export const syncInboxViaBackend = async (
+  accessToken: string,
+  maxResults: number = 15,
+  notify: boolean = false
+): Promise<SyncResult> => {
+  const resp = await fetch(`${BACKEND_BASE_URL}/api/sync-inbox?limit=${maxResults}&notify=${notify}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token: accessToken, limit: maxResults, notify }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => resp.statusText);
+    throw new Error(`Backend sync failed (${resp.status}): ${errText}`);
+  }
+
+  const data = await resp.json();
+  const backendOpps: BackendOpportunity[] = data.opportunities || [];
+
+  const opportunities = backendOpps.map(mapToOpportunity);
+  const emails = backendOpps.map(mapToEmailLog);
+
+  if (emails.length > 0) {
+    const existingEmails: EmailLog[] = JSON.parse(localStorage.getItem('preppilot_real_emails') || '[]');
+    const merged = [...emails, ...existingEmails.filter((e) => !emails.some((n) => n.subject === e.subject))];
+    localStorage.setItem('preppilot_real_emails', JSON.stringify(merged));
+  }
+
+  if (opportunities.length > 0) {
+    const existingOpps: Opportunity[] = JSON.parse(localStorage.getItem('preppilot_real_opportunities') || '[]');
+    const merged = [
+      ...opportunities,
+      ...existingOpps.filter((o) => !opportunities.some((n) => n.company === o.company && n.title === o.title)),
+    ];
+    localStorage.setItem('preppilot_real_opportunities', JSON.stringify(merged));
+  }
+
+  window.dispatchEvent(new CustomEvent('preppilot:inbox-synced', { detail: { count: opportunities.length } }));
+
+  let emailAddress = getConnectedEmail() || '';
+  try {
+    const profile = await fetchGmailProfile(accessToken);
+    emailAddress = profile.emailAddress;
+  } catch {
+    // token might be valid for backend calls but profile fetch failed client-side; non-fatal
+  }
+
+  return {
+    source: 'google_oauth',
+    emailAddress,
+    totalFetched: data.processed ?? backendOpps.length,
+    opportunitiesDetected: opportunities.length,
+    emails,
+    opportunities,
+  };
+};
+
+/**
  * Fetches real user messages from Gmail REST API and extracts opportunities
+ * (client-side, keyword-based — kept as an offline fallback if the backend
+ * is unreachable, but syncInboxViaBackend above should be preferred).
  */
 export const syncRealGmailInbox = async (accessToken: string, maxResults: number = 15): Promise<SyncResult> => {
   // 1. Get user profile
