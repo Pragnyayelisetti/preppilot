@@ -22,8 +22,30 @@ export const OpportunitiesRadarView: React.FC<OpportunitiesRadarViewProps> = ({
 }) => {
   const [filterType, setFilterType] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
+  const [realOpportunities, setRealOpportunities] = useState<Opportunity[]>(() => {
+    try {
+      const saved = localStorage.getItem('preppilot_real_opportunities');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // Ignore
+    }
+    return [];
+  });
 
-  const allOpportunities = [TECHNOVA_OPPORTUNITY, ...MOCK_OPPORTUNITIES];
+  React.useEffect(() => {
+    const handleSync = () => {
+      try {
+        const saved = localStorage.getItem('preppilot_real_opportunities');
+        if (saved) setRealOpportunities(JSON.parse(saved));
+      } catch {
+        // Ignore
+      }
+    };
+    window.addEventListener('preppilot:inbox-synced', handleSync);
+    return () => window.removeEventListener('preppilot:inbox-synced', handleSync);
+  }, []);
+
+  const allOpportunities = [...realOpportunities, TECHNOVA_OPPORTUNITY, ...MOCK_OPPORTUNITIES];
 
   const filtered = allOpportunities.filter((opp) => {
     const matchesType = filterType === 'all' || opp.type === filterType;

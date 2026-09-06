@@ -33,5 +33,15 @@ class ProcessEmailRequest(BaseModel):
     body: str
 
 
+class SyncInboxRequest(BaseModel):
+    access_token: Optional[str] = None
+    limit: Optional[int] = 10
+    notify: Optional[bool] = False
+
+
+class OAuthVerifyRequest(BaseModel):
+    access_token: str
+
+
 class WhatsAppPreview(BaseModel):
     message: str
