@@ -1,11 +1,17 @@
 """
 PrepPilot Process & Opportunity Routes
 Provides endpoints for student profile, email ingestion, inbox sync, and WhatsApp alerts.
-Uses duplicate answers and in-memory persistence mirroring the frontend style.
+Supports Google OAuth 2.0 (Gmail REST API), IMAP credentials, and demo fallback.
 """
-from typing import List
-from fastapi import APIRouter, HTTPException, Query
-from app.models import StudentProfile, ProcessEmailRequest, ExtractedOpportunity
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query, Header, Body
+from app.models import (
+    StudentProfile,
+    ProcessEmailRequest,
+    ExtractedOpportunity,
+    SyncInboxRequest,
+    OAuthVerifyRequest,
+)
 from app.services import gmail_service, llm_service, whatsapp_service
 
 router = APIRouter(prefix="/api", tags=["process"])
@@ -59,13 +65,13 @@ _opportunities: List[ExtractedOpportunity] = [
         role_or_title="Data Analyst Associate",
         status="assessment",
         deadline_or_event_date="2026-09-16",
-        days_remaining=11,
-        eligibility="Undergraduate graduating in 2026 with strong analytical background",
-        required_skills=["SQL", "Python", "Data Analysis", "DBMS"],
+        days_remaining=12,
+        eligibility="Open to all engineering streams, CGPA >= 7.5",
+        required_skills=["Python", "SQL", "Data Analysis", "Tableau"],
         match_score=85,
-        focus_areas=["SQL Window Functions", "Query Optimization & Indexing", "Statistical Analysis"],
-        todays_task="Practice 10 SQL join and window ranking queries on HackerRank",
-        raw_summary="Online Technical Assessment invitation received. 90-minute window closes Sept 16.",
+        focus_areas=["SQL Window Functions", "Data Modeling & Normalization", "Speed Aptitude"],
+        todays_task="Complete 2 SQL window function practice sets and practice 20 aptitude questions",
+        raw_summary="Online Technical Assessment invitation received. 90-minute timed test on HackerRank.",
     ),
     ExtractedOpportunity(
         is_opportunity=True,
@@ -74,13 +80,13 @@ _opportunities: List[ExtractedOpportunity] = [
         role_or_title="Software Development Engineer (Azure)",
         status="new",
         deadline_or_event_date="2026-09-25",
-        days_remaining=20,
-        eligibility="B.Tech CSE/IT with CGPA >= 8.0",
-        required_skills=["DSA", "System Design", "Cloud Architecture", "C++ / Python"],
+        days_remaining=21,
+        eligibility="B.Tech CSE/IT with CGPA >= 8.0, zero active backlogs",
+        required_skills=["C++", "Java", "DSA", "OS", "System Design", "Algorithms"],
         match_score=88,
-        focus_areas=["Binary Trees & Graphs", "Distributed Systems Basics", "Mock Interviews"],
-        todays_task="Review Graph BFS/DFS traversal algorithms and solve 3 medium problems",
-        raw_summary="Microsoft Azure Campus Placement Drive 2026 resume submissions open until Sept 25.",
+        focus_areas=["Tree & Graph Traversals", "Operating System Processes & Deadlocks", "Computer Networks (TCP/IP)"],
+        todays_task="Solve Binary Tree Zigzag Level Order Traversal and revise Deadlock Conditions",
+        raw_summary="Campus Placement Drive notification. Applications open until September 25th.",
     ),
 ]
 
@@ -97,6 +103,28 @@ def update_profile(profile: StudentProfile):
     global _profile
     _profile = profile
     return _profile
+
+
+@router.post("/gmail/verify")
+def verify_gmail_token(
+    req: Optional[OAuthVerifyRequest] = None,
+    authorization: Optional[str] = Header(None),
+):
+    """Verifies a Google OAuth access token against the Gmail REST API."""
+    token = None
+    if req and req.access_token:
+        token = req.access_token
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization.split("Bearer ", 1)[1].strip()
+
+    if not token:
+        raise HTTPException(status_code=400, detail="access_token is required via JSON body or Authorization: Bearer <token>")
+
+    status = gmail_service.verify_oauth_token(token)
+    if not status.get("valid"):
+        raise HTTPException(status_code=401, detail=status.get("error", "Invalid or expired Google OAuth token"))
+
+    return status
 
 
 @router.post("/process-email", response_model=ExtractedOpportunity)
@@ -119,14 +147,43 @@ def process_single_email(req: ProcessEmailRequest, notify: bool = False):
 
 
 @router.post("/sync-inbox")
-def sync_inbox(limit: int = 10, notify: bool = False):
-    """Pulls recent recruitment emails and extracts opportunities into the radar."""
+def sync_inbox(
+    req: Optional[SyncInboxRequest] = None,
+    limit: int = Query(10, description="Max emails to analyze"),
+    notify: bool = Query(False, description="Send WhatsApp alert for new opportunities"),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Pulls recruitment emails and extracts opportunities into the radar.
+    Supports:
+    - Google OAuth Bearer Token (via Authorization header or req.access_token)
+    - Direct IMAP credentials (GMAIL_ADDRESS & GMAIL_APP_PASSWORD)
+    - Realistic duplicate demo stream fallback
+    """
+    token: Optional[str] = None
+    target_limit = limit
+    target_notify = notify
+
+    if req:
+        if req.access_token:
+            token = req.access_token
+        if req.limit:
+            target_limit = req.limit
+        if req.notify is not None:
+            target_notify = req.notify
+
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.split("Bearer ", 1)[1].strip()
+
+    source = "google_oauth" if token else ("imap" if gmail_service.settings.gmail_address else "demo_stream")
+
     try:
-        emails = gmail_service.fetch_recent_emails(limit=limit)
+        emails = gmail_service.fetch_recent_emails(limit=target_limit, access_token=token)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inbox fetch failed: {e}")
 
     results = []
+    added_count = 0
     for e in emails:
         try:
             opp = llm_service.analyze_email(e["subject"], e["sender"], e["body"], _profile)
@@ -134,7 +191,8 @@ def sync_inbox(limit: int = 10, notify: bool = False):
                 # Deduplicate by company and role
                 if not any(o.company_or_org == opp.company_or_org and o.role_or_title == opp.role_or_title for o in _opportunities):
                     _opportunities.insert(0, opp)
-                if notify:
+                    added_count += 1
+                if target_notify:
                     try:
                         whatsapp_service.send_whatsapp_alert(opp)
                     except Exception:
@@ -144,9 +202,12 @@ def sync_inbox(limit: int = 10, notify: bool = False):
             continue
 
     return {
+        "source": source,
         "processed": len(results),
         "opportunities_found": sum(1 for r in results if r.is_opportunity),
+        "new_opportunities_added": added_count,
         "total_active_opportunities": len(_opportunities),
+        "opportunities": [r for r in results if r.is_opportunity],
     }
 
 
