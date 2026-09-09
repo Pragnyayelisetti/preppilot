@@ -1,326 +1,230 @@
 import React, { useState } from 'react';
-import { LoginPage } from './components/auth/LoginPage';
-import { SignupPage } from './components/auth/SignupPage';
-import { ForgotPasswordPage } from './components/auth/ForgotPasswordPage';
-import { OnboardingPage } from './components/onboarding/OnboardingPage';
-import { StudentDashboard } from './components/dashboard/StudentDashboard';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { TestModeProvider, useTestMode } from './context/TestModeContext';
+import { Opportunity } from './types';
+import { Sidebar } from './components/layout/Sidebar';
+import { Header } from './components/layout/Header';
+import { OverviewDashboard } from './components/dashboard/OverviewDashboard';
+import { OpportunityDetail } from './components/opportunities/OpportunityDetail';
+import { MockTestRunner } from './components/mock-test/MockTestRunner';
+import { MockTestSetup } from './components/mock-test/MockTestSetup';
+import { MockInterviewSimulator } from './components/mock-interview/MockInterviewSimulator';
+import { CareerCalendar } from './components/calendar/CareerCalendar';
+import { WhatsAppCenter } from './components/whatsapp/WhatsAppCenter';
+import { EmailIntelligenceView } from './components/gmail/EmailIntelligenceView';
+import { GmailConnectModal } from './components/gmail/GmailConnectModal';
+import { AiCareerAssistant } from './components/assistant/AiCareerAssistant';
+import { ProfileView } from './components/profile/ProfileView';
+import { AuthModal } from './components/auth/AuthModal';
+import { OnboardingFlow } from './components/onboarding/OnboardingFlow';
+import { Sparkles, Mail, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { MockTest } from './types';
 
-// Landing Page Components
-import { Navbar } from './components/Navbar';
-import { Hero } from './components/Hero';
-import { Features } from './components/Features';
-import { HowItWorks } from './components/HowItWorks';
-import { OpportunityShowcase } from './components/OpportunityShowcase';
-import { Comparison } from './components/Comparison';
-import { Testimonials } from './components/Testimonials';
-import { CtaSection } from './components/CtaSection';
-import { Footer } from './components/Footer';
-import { InteractiveDemoModal } from './components/InteractiveDemoModal';
-import { Opportunity } from './data/mockOpportunities';
+const AppContent: React.FC = () => {
+  const { user, isLoading } = useAuth();
+  const { isTestFullscreen } = useTestMode();
+  const [currentView, setCurrentView] = useState<string>('dashboard');
+  const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showGmailModal, setShowGmailModal] = useState(false);
+  const [readyMockTest, setReadyMockTest] = useState<{ test: MockTest; stream: MediaStream | null } | null>(null);
 
-export interface UserSession {
-  name: string;
-  email: string;
-  university?: string;
-  degree?: string;
-  branch?: string;
-  graduationYear?: string;
-  currentYear?: string;
-  semester?: string;
-  careerGoal?: string;
-  customCareerGoal?: string;
-  skills?: string[];
-  preferredOpportunities?: string[];
-  preferredRoles?: string[];
-  cgpa?: string;
-  selectedTracks?: string[];
-  phone?: string;
-  enableWhatsApp?: boolean;
-}
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+        <div className="w-10 h-10 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4" />
+        <h2 className="text-sm font-bold text-slate-800">Initializing PrepPilot AI Engine...</h2>
+        <p className="text-xs text-slate-500 mt-1">Connecting to opportunity intelligence services</p>
+      </div>
+    );
+  }
 
-const getDefaultUser = (): UserSession => {
-  const defaultUser: UserSession = {
-    name: 'Alex Chen',
-    email: 'alex.chen@university.edu',
-    university: 'University Institute of Technology',
-    degree: 'B.Tech',
-    branch: 'Computer Science & Engineering',
-    graduationYear: '2026',
-    currentYear: '3rd Year',
-    semester: 'Semester 6',
-    careerGoal: 'Software Development',
-    skills: ['Python', 'JavaScript', 'React', 'DSA', 'SQL', 'Git'],
-    preferredOpportunities: ['Internships', 'Hackathons', 'Placements'],
-    preferredRoles: ['SDE Intern', 'Full Stack Developer'],
-    cgpa: '8.4',
+  // If user is not authenticated yet or email not verified
+  if (!user || !user.isEmailVerified) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-between py-12 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-md mx-auto w-full">
+          <AuthModal />
+        </div>
+
+        <footer className="text-center text-xs text-slate-400 mt-8">
+          PrepPilot AI • Intelligent Career Copilot for University Students
+        </footer>
+      </div>
+    );
+  }
+
+  // If user is authenticated but hasn't finished onboarding
+  if (!user.isOnboarded) {
+    return (
+      <div className="min-h-screen bg-slate-50 py-10 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-3xl mx-auto">
+          <div className="text-center mb-6">
+            <h1 className="text-2xl font-bold text-slate-900">Welcome to PrepPilot, {user.name}</h1>
+            <p className="text-xs text-slate-500 mt-1">
+              Let's tailor your career copilot to your university, skills, and dream company goals.
+            </p>
+          </div>
+          <OnboardingFlow onComplete={() => setCurrentView('dashboard')} />
+        </div>
+      </div>
+    );
+  }
+
+  // Handler helpers
+  const handleViewOpportunity = (opp: Opportunity) => {
+    setSelectedOpportunity(opp);
+    setCurrentView('opportunity-detail');
   };
 
-  if (typeof window !== 'undefined') {
-    try {
-      const saved = localStorage.getItem('preppilot_student_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...defaultUser,
-          ...parsed,
-          name: parsed.name || defaultUser.name,
-        };
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }
-  return defaultUser;
+  const handleStartMockTest = (opp?: Opportunity) => {
+    if (opp) setSelectedOpportunity(opp);
+    setReadyMockTest(null);
+    setCurrentView('mock-tests');
+  };
+
+  const handleStartMockInterview = (opp?: Opportunity) => {
+    if (opp) setSelectedOpportunity(opp);
+    setCurrentView('mock-interview');
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex text-slate-800 font-sans antialiased">
+      {/* Sidebar navigation */}
+      <Sidebar
+        currentView={currentView}
+        onNavigate={(view) => {
+          if (view !== 'opportunity-detail') {
+            setSelectedOpportunity(null);
+          }
+          setCurrentView(view);
+        }}
+        isOpen={mobileSidebarOpen}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
+      />
+
+      {/* Main Content Area — no reserved sidebar space while a proctored
+          test has hidden the sidebar via isTestFullscreen. */}
+      <div className={`flex-1 flex flex-col min-w-0 ${isTestFullscreen ? '' : 'lg:pl-64'}`}>
+        <Header
+          currentView={currentView}
+          onToggleSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+          onNavigate={(view) => setCurrentView(view)}
+        />
+
+        <main className="flex-1 p-4 lg:p-8 max-w-7xl mx-auto w-full">
+          {/* Dashboard View */}
+          {currentView === 'dashboard' && (
+            <OverviewDashboard
+              onSelectOpportunity={handleViewOpportunity}
+              onPrepareOpportunity={handleViewOpportunity}
+              onStartGeneralMockTest={() => handleStartMockTest()}
+              onStartGeneralMockInterview={() => handleStartMockInterview()}
+              onOpenGmailConnect={() => setShowGmailModal(true)}
+            />
+          )}
+
+          {/* Opportunities List View */}
+          {currentView === 'opportunities' && (
+            <OverviewDashboard
+              onSelectOpportunity={handleViewOpportunity}
+              onPrepareOpportunity={handleViewOpportunity}
+              onStartGeneralMockTest={() => handleStartMockTest()}
+              onStartGeneralMockInterview={() => handleStartMockInterview()}
+              onOpenGmailConnect={() => setShowGmailModal(true)}
+            />
+          )}
+
+          {/* Opportunity Detail View */}
+          {currentView === 'opportunity-detail' && selectedOpportunity && (
+            <OpportunityDetail
+              opportunity={selectedOpportunity}
+              onBack={() => setCurrentView('dashboard')}
+              onStartMockTest={(opp) => handleStartMockTest(opp)}
+              onStartMockInterview={(opp) => handleStartMockInterview(opp)}
+            />
+          )}
+
+          {/* Mock Test Runner */}
+          {currentView === 'mock-tests' && (
+            readyMockTest ? (
+              <MockTestRunner
+                test={readyMockTest.test}
+                cameraStream={readyMockTest.stream}
+                onExit={() => { setReadyMockTest(null); setCurrentView('dashboard'); }}
+                onPracticeWeakAreas={() => setCurrentView('assistant')}
+              />
+            ) : (
+              <MockTestSetup
+                onReady={(test: MockTest, stream: MediaStream | null) => setReadyMockTest({ test, stream })}
+                onCancel={() => setCurrentView('dashboard')}
+              />
+            )
+          )}
+
+          {/* Mock Interview Simulator */}
+          {currentView === 'mock-interview' && (
+            <MockInterviewSimulator
+              opportunity={selectedOpportunity || undefined}
+              onExit={() => setCurrentView('dashboard')}
+            />
+          )}
+
+          {/* Career Calendar */}
+          {currentView === 'calendar' && (
+            <CareerCalendar
+              opportunities={[]}
+              onSelectOpportunity={handleViewOpportunity}
+              onTakeMockTest={(opp) => handleStartMockTest(opp)}
+            />
+          )}
+
+          {/* WhatsApp Alert Center */}
+          {currentView === 'whatsapp' && <WhatsAppCenter />}
+
+          {/* Email Intelligence & Scanned Inbox */}
+          {currentView === 'email-intelligence' && (
+            <div className="space-y-6">
+              <GmailConnectModal onScanComplete={() => setCurrentView('dashboard')} />
+              <EmailIntelligenceView onViewOpportunity={handleViewOpportunity} />
+            </div>
+          )}
+
+          {/* AI Career Assistant */}
+          {currentView === 'assistant' && <AiCareerAssistant />}
+
+          {/* Student Profile View */}
+          {currentView === 'profile' && <ProfileView />}
+        </main>
+      </div>
+
+      {/* Optional Gmail Connect Modal Popup */}
+      {showGmailModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setShowGmailModal(false)}
+        >
+          <div
+            className="w-full max-w-2xl bg-white rounded-2xl overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GmailConnectModal
+              onClose={() => setShowGmailModal(false)}
+              onScanComplete={() => setShowGmailModal(false)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default function App() {
-  // Resolve initial view from URL path
-  const getInitialView = (): 'login' | 'signup' | 'forgot-password' | 'onboarding' | 'dashboard' | 'landing' => {
-    if (typeof window !== 'undefined') {
-      const path = window.location.pathname;
-      if (path === '/signup') return 'signup';
-      if (path === '/forgot-password') return 'forgot-password';
-      if (path === '/dashboard') return 'dashboard';
-      if (path === '/onboarding') return 'onboarding';
-      if (path === '/landing') return 'landing';
-    }
-    return 'login';
-  };
-
-  // Application starts with Login as the default first screen as strictly requested
-  const [currentView, setCurrentView] = useState<
-    'login' | 'signup' | 'forgot-password' | 'onboarding' | 'dashboard' | 'landing'
-  >(getInitialView);
-
-  // Synchronize browser history and path changes
-  const navigate = (path: string) => {
-    let view: 'login' | 'signup' | 'forgot-password' | 'onboarding' | 'dashboard' | 'landing' = 'login';
-    if (path === '/signup') view = 'signup';
-    else if (path === '/forgot-password') view = 'forgot-password';
-    else if (path === '/dashboard') view = 'dashboard';
-    else if (path === '/onboarding') view = 'onboarding';
-    else if (path === '/landing') view = 'landing';
-    else view = 'login';
-
-    setCurrentView(view);
-    try {
-      if (window.location.pathname !== path) {
-        window.history.pushState({}, '', path);
-      }
-    } catch {
-      // Safe fallback if history API is restricted in sandboxed iframes
-    }
-  };
-
-  // Listen to popstate (back/forward browser buttons)
-  React.useEffect(() => {
-    const handlePopState = () => {
-      const path = window.location.pathname;
-      if (path === '/signup') setCurrentView('signup');
-      else if (path === '/forgot-password') setCurrentView('forgot-password');
-      else if (path === '/dashboard') setCurrentView('dashboard');
-      else if (path === '/onboarding') setCurrentView('onboarding');
-      else if (path === '/landing') setCurrentView('landing');
-      else setCurrentView('login');
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  const [currentUser, setCurrentUser] = useState<UserSession>(getDefaultUser);
-
-  // Modal state for opportunity drilldowns and demo interactions
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<'get-started' | 'how-it-works' | 'opportunity-detail' | 'sign-in'>('get-started');
-  const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
-
-  // Authentication Handlers
-  const handleLoginSuccess = (user: { name: string; email: string }) => {
-    setCurrentUser((prev) => ({
-      ...prev,
-      name: user.name,
-      email: user.email,
-    }));
-    // Successful login navigates to Dashboard
-    navigate('/dashboard');
-  };
-
-  const handleSignupSuccess = (user: { name: string; email: string }) => {
-    setCurrentUser((prev) => ({
-      ...prev,
-      name: user.name,
-      email: user.email,
-    }));
-    // Successful signup navigates to Onboarding
-    navigate('/onboarding');
-  };
-
-  const handleOnboardingComplete = (onboardingData: any) => {
-    setCurrentUser((prev) => ({
-      ...prev,
-      ...onboardingData,
-    }));
-    // Completing onboarding navigates to Dashboard
-    navigate('/dashboard');
-  };
-
-  const handleSignOut = () => {
-    navigate('/');
-  };
-
-  const handleOpenDemoFromLanding = (mode: 'get-started' | 'how-it-works' | 'sign-in' = 'get-started') => {
-    if (mode === 'sign-in') {
-      navigate('/');
-      return;
-    }
-    if (mode === 'get-started') {
-      navigate('/signup');
-      return;
-    }
-    setSelectedOpp(null);
-    setModalMode(mode);
-    setModalOpen(true);
-  };
-
-  const handleSelectOpportunity = (opp: Opportunity) => {
-    setSelectedOpp(opp);
-    setModalMode('opportunity-detail');
-    setModalOpen(true);
-  };
-
-  // 1. LOGIN SCREEN (Default "/")
-  if (currentView === 'login') {
-    return (
-      <LoginPage
-        onNavigateToSignup={() => navigate('/signup')}
-        onNavigateToForgotPassword={() => navigate('/forgot-password')}
-        onLoginSuccess={handleLoginSuccess}
-        onViewLandingPage={() => navigate('/landing')}
-      />
-    );
-  }
-
-  // 2. SIGNUP SCREEN (/signup)
-  if (currentView === 'signup') {
-    return (
-      <SignupPage
-        onNavigateToLogin={() => navigate('/')}
-        onSignupSuccess={handleSignupSuccess}
-        onViewLandingPage={() => navigate('/landing')}
-      />
-    );
-  }
-
-  // 3. FORGOT PASSWORD SCREEN (/forgot-password)
-  if (currentView === 'forgot-password') {
-    return (
-      <ForgotPasswordPage
-        onNavigateToLogin={() => navigate('/')}
-      />
-    );
-  }
-
-  // 4. ONBOARDING SCREEN (After Signup / /onboarding)
-  if (currentView === 'onboarding') {
-    return (
-      <OnboardingPage
-        user={currentUser}
-        onComplete={handleOnboardingComplete}
-      />
-    );
-  }
-
-  // 5. STUDENT DASHBOARD (After Login or Onboarding)
-  if (currentView === 'dashboard') {
-    return (
-      <>
-        <StudentDashboard
-          user={currentUser}
-          onSignOut={handleSignOut}
-          onViewLandingPage={() => navigate('/landing')}
-          onSelectOpportunity={handleSelectOpportunity}
-        />
-        <InteractiveDemoModal
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          initialMode={modalMode}
-          selectedOpportunity={selectedOpp}
-        />
-      </>
-    );
-  }
-
-  // 6. LANDING PAGE (Accessible on demand via top nav or links)
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-100 selection:bg-indigo-500/30 selection:text-indigo-200 relative overflow-hidden font-sans">
-      {/* Global Background Ambient Glows ("Elegant Dark" theme) */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/15 rounded-full blur-[160px]"></div>
-        <div className="absolute top-[35%] right-[-10%] w-[45%] h-[45%] bg-violet-600/12 rounded-full blur-[160px]"></div>
-        <div className="absolute bottom-[-10%] left-[20%] w-[40%] h-[40%] bg-blue-600/10 rounded-full blur-[140px]"></div>
-      </div>
-
-      {/* Floating Shortcut to Return to Login / Dashboard */}
-      <div className="sticky top-0 z-50 bg-indigo-950/80 border-b border-indigo-500/30 backdrop-blur-md px-4 py-2 text-center text-xs flex items-center justify-between max-w-7xl mx-auto rounded-b-2xl shadow-lg">
-        <span className="text-indigo-200 font-medium">
-          Viewing Public Landing Page
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigate('/')}
-            className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition-all"
-          >
-            Go to Sign In
-          </button>
-          <button
-            onClick={() => navigate('/signup')}
-            className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold text-[11px] transition-all"
-          >
-            Create Account
-          </button>
-        </div>
-      </div>
-
-      {/* Navigation Header */}
-      <Navbar onOpenDemo={handleOpenDemoFromLanding} />
-
-      <main className="relative z-10">
-        {/* Hero with Headline, Subhead, CTAs & Live Interactive Dashboard Mockup */}
-        <Hero
-          onOpenDemo={handleOpenDemoFromLanding}
-          onOpenActionPlan={handleSelectOpportunity}
-        />
-
-        {/* Core Features: 6 Pillars of Career Intelligence */}
-        <Features />
-
-        {/* 5-Step How It Works Interactive Architecture */}
-        <HowItWorks />
-
-        {/* Live Opportunity Radar: Internships, Hackathons, Placements, Scholarships */}
-        <OpportunityShowcase onSelectOpportunity={handleSelectOpportunity} />
-
-        {/* Old Way vs. The PrepPilot Way Comparison */}
-        <Comparison />
-
-        {/* Student Testimonials & Outcomes */}
-        <Testimonials />
-
-        {/* High-Impact Final Call to Action */}
-        <CtaSection onOpenDemo={handleOpenDemoFromLanding} />
-      </main>
-
-      {/* Comprehensive Footer */}
-      <Footer />
-
-      {/* Interactive Modal for Live Hackathon Demonstration */}
-      <InteractiveDemoModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        initialMode={modalMode}
-        selectedOpportunity={selectedOpp}
-      />
-    </div>
+    <AuthProvider>
+      <TestModeProvider>
+        <AppContent />
+      </TestModeProvider>
+    </AuthProvider>
   );
 }

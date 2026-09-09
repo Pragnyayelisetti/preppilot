@@ -1,6 +1,0 @@
-{
-  "name": "PrepPilot",
-  "description": "Know what to prepare, before it's too late — intelligent student career copilot and opportunity preparation hub.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
