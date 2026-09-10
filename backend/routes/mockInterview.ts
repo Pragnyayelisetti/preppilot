@@ -59,27 +59,49 @@ function buildNextQuestionPrompt(session: MockInterviewSession): string {
   const history = session.conversation
     .map(c => `${c.role === 'assistant' ? 'Interviewer' : 'Candidate'}: ${c.content}`)
     .join('\n');
+  const lastUserAnswer = [...session.conversation].reverse().find(c => c.role === 'user')?.content || '';
+
   return `${INTERVIEWER_GUARDRAIL}
 
-Topic: "${session.topic}"
-${session.company ? `Target company context: ${session.company}` : ''}
-This is question ${session.currentQuestionIndex + 1} of ${session.totalQuestions}.
+Interview Context:
+- Track: ${session.track}
+${session.topic ? `- Focus Topic: "${session.topic}"` : ''}
+${session.company ? `- Target Company: ${session.company}` : ''}
+- Question ${session.currentQuestionIndex + 1} of ${session.totalQuestions}
 
-Conversation so far:
+Conversation History so far:
 ${history}
 
-Ask the NEXT interview question on this topic, building naturally on what the candidate has said so far, without repeating any earlier question.`;
+LATEST CANDIDATE RESPONSE:
+"${lastUserAnswer}"
+
+MANDATORY ADAPTIVE INSTRUCTION:
+- You MUST adapt this next question directly based on what the candidate just explained above!
+- Probe deeper into any technical terms, frameworks, architectural trade-offs, algorithms, or examples they brought up.
+- If they struggled or missed key considerations (like scalability, edge cases, error handling, or teamwork dynamics), ask an adaptive follow-up probing that area.
+- Ask ONE concise, authentic interview question. Do NOT repeat previous questions.
+- Output ONLY the question text itself.`;
 }
 
-function fallbackQuestion(topic: string, index: number): string {
-  const templates = [
-    `Let's start with ${topic}: can you walk me through a project or problem where you applied it?`,
-    `What's a common mistake people make with ${topic}, and how would you avoid it?`,
-    `How would you explain a core concept of ${topic} to someone who's never heard of it?`,
-    `Describe a trade-off you'd need to think about when using ${topic} in a real system.`,
-    `If you had to go deeper into ${topic} next, what would you want to learn and why?`
+function fallbackQuestion(topicOrTrack: string, index: number, lastAnswer?: string): string {
+  const isTechnical = /tech|dsa|system|code|data|sql|dev/i.test(topicOrTrack);
+  if (isTechnical) {
+    const technicalFollowUps = [
+      `Building on what you just shared: what edge cases or failure modes would you need to protect against in production?`,
+      `How would your design or approach scale if the traffic or dataset size increased by 100x?`,
+      `What alternative technology or pattern did you consider for that, and what was the main trade-off?`,
+      `How would you test and monitor that system to ensure 99.9% uptime and low latency?`,
+      `If you had to refactor that implementation today, what is the first thing you would improve and why?`
+    ];
+    return technicalFollowUps[index % technicalFollowUps.length];
+  }
+  const generalFollowUps = [
+    `That's interesting. What was the biggest obstacle you personally overcame during that experience?`,
+    `How did you measure whether that outcome was successful, and what would you do differently in hindsight?`,
+    `Can you describe how you communicated that decision to other team members or stakeholders?`,
+    `If priorities shifted unexpectedly halfway through, how would you adapt your approach?`
   ];
-  return templates[index % templates.length];
+  return generalFollowUps[index % generalFollowUps.length];
 }
 
 // Start Interview Session
@@ -220,12 +242,13 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
   // Check if more questions remain
   if (session.currentQuestionIndex < session.totalQuestions) {
     let nextQ: string;
-
-    if (session.topic) {
+    try {
       const aiText = await generateContentWithFallback(buildNextQuestionPrompt(session), '');
-      nextQ = aiText.trim() || fallbackQuestion(session.topic, session.currentQuestionIndex);
-    } else {
-      nextQ = session.questions[session.currentQuestionIndex];
+      const lastAns = session.conversation.filter(c => c.role === 'user').pop()?.content;
+      nextQ = aiText.trim() || fallbackQuestion(session.topic || session.track, session.currentQuestionIndex, lastAns);
+    } catch {
+      const lastAns = session.conversation.filter(c => c.role === 'user').pop()?.content;
+      nextQ = fallbackQuestion(session.topic || session.track, session.currentQuestionIndex, lastAns);
     }
 
     const transitionMessage = `Thank you for your answer. Let's move to the next question:\n\n${nextQ}`;

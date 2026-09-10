@@ -128,7 +128,10 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
     violationCount,
     lastViolation,
     maxViolations,
-    modelLoadError
+    modelLoadError,
+    isFaceVisible,
+    faceCount,
+    audioLevel,
   } = useProctoring({
     stream: mediaStream,
     videoRef: candidateVideoRef,
@@ -810,6 +813,9 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
         maxViolations={maxViolations}
         lastViolation={lastViolation}
         modelLoadError={modelLoadError}
+        isFaceVisible={isFaceVisible}
+        faceCount={faceCount}
+        audioLevel={audioLevel}
       />
 
       {/* Video Call Top Bar */}
@@ -947,6 +953,16 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold backdrop-blur-md border ${
+                !isFaceVisible
+                  ? 'bg-rose-600/90 text-white border-rose-400 animate-pulse'
+                  : faceCount > 1
+                  ? 'bg-amber-600/90 text-white border-amber-400 animate-pulse'
+                  : 'bg-emerald-600/70 text-emerald-100 border-emerald-400/30'
+              }`}>
+                {!isFaceVisible ? 'Face Missing' : faceCount > 1 ? `${faceCount} People` : 'Face Active'}
+              </span>
+
               <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-md ${
                 isRecording
                   ? 'bg-rose-600/90 text-white animate-pulse'
