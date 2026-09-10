@@ -164,6 +164,22 @@ export interface MockTestResult {
   userAnswers: Record<string, number>;
 }
 
+export interface LanguageAndGrammarMetrics {
+  grammarScore: number;
+  vocabularyScore: number;
+  fluencyScore: number;
+  grammarCritiques: {
+    originalPhrase: string;
+    correction: string;
+    rule: string;
+  }[];
+  vocabularySuggestions: {
+    spokenWord: string;
+    enhancedAlternative: string;
+  }[];
+  deliveryFeedback: string;
+}
+
 export interface MockInterviewEvaluation {
   overallScore: number;
   communication: number;
@@ -171,6 +187,7 @@ export interface MockInterviewEvaluation {
   problemSolving: number;
   confidence: number;
   structure: number;
+  languageAndGrammar?: LanguageAndGrammarMetrics;
   whatYouDidWell: string[];
   whatToImprove: string[];
   betterAnswerApproach: string;

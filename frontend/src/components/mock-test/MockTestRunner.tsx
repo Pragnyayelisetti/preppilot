@@ -22,6 +22,7 @@ import {
   Download,
   Video,
   ShieldOff,
+  ShieldAlert,
   Maximize
 } from 'lucide-react';
 
@@ -60,6 +61,8 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
   // Set once the test is force-ended by the proctoring system, so the
   // results view (and the "submitting" overlay before it) can explain why.
   const [autoSubmitReason, setAutoSubmitReason] = useState<string | null>(null);
+  const [isDisqualified, setIsDisqualified] = useState(false);
+  const [disqualificationViolations, setDisqualificationViolations] = useState<any[]>([]);
 
   useEffect(() => {
     if (preloadedTest) {
@@ -171,13 +174,14 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
     }
   };
 
-  // Fires once proctoring hits MAX_PROCTORING_VIOLATIONS: auto-submit
-  // whatever's answered so far. Camera/full-screen teardown happens via the
-  // isSubmitted effect above, same as every other submit path.
+  // Fires once proctoring hits MAX_PROCTORING_VIOLATIONS (3 violations):
+  // immediately disqualifies the exam, stops camera & full-screen, and shows termination screen.
   const handleMaxViolations = () => {
+    setIsDisqualified(true);
     setAutoSubmitReason(
-      `Test auto-submitted after ${MAX_PROCTORING_VIOLATIONS} proctoring violations.`
+      `Assessment forcibly terminated: Exceeded maximum allowed proctoring violations (${MAX_PROCTORING_VIOLATIONS}/${MAX_PROCTORING_VIOLATIONS}).`
     );
+    stopProctoring();
     handleSubmitTest();
   };
 
@@ -186,6 +190,7 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
   const {
     violationCount,
     lastViolation,
+    violations,
     maxViolations,
     isFullscreen,
     reenterFullscreen,
@@ -197,6 +202,13 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
     maxViolations: MAX_PROCTORING_VIOLATIONS,
     onMaxViolationsReached: handleMaxViolations,
   });
+
+  // Track violations when disqualified so they stay rendered even after teardown
+  useEffect(() => {
+    if (violations.length > 0) {
+      setDisqualificationViolations(violations);
+    }
+  }, [violations]);
 
   // Timer countdown
   useEffect(() => {
@@ -338,6 +350,83 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
         >
           Return to Dashboard
         </button>
+      </div>
+    );
+  }
+
+  // --- DISQUALIFICATION VIEW (3 Proctoring Violations reached) ---
+  if (isDisqualified) {
+    const recordedViolations = disqualificationViolations.length > 0 ? disqualificationViolations : violations;
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 py-10 animate-fade-in">
+        <div className="bg-white border-2 border-rose-300 rounded-3xl p-8 shadow-xl space-y-6 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-rose-100 border border-rose-300 text-rose-600 flex items-center justify-center mx-auto shadow-inner">
+            <ShieldAlert className="w-9 h-9" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full bg-rose-100 text-rose-800 border border-rose-300 uppercase tracking-wider">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Exam Terminated • Disqualified</span>
+            </span>
+            <h1 className="text-2xl font-bold text-slate-900 mt-2">
+              Proctored Integrity Limit Exceeded
+            </h1>
+            <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+              This assessment was automatically halted because <strong>{MAX_PROCTORING_VIOLATIONS} proctoring violations</strong> were triggered during the exam session. In accordance with strict examination regulations, the attempt has been invalidated.
+            </p>
+          </div>
+
+          {/* Violations Log */}
+          <div className="text-left bg-rose-50/80 border border-rose-200 rounded-2xl p-5 space-y-3">
+            <div className="text-xs font-bold text-rose-900 uppercase tracking-wider flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-rose-600" />
+                <span>Recorded Violations (3 / 3 Strikes)</span>
+              </span>
+              <span className="text-[11px] font-semibold text-rose-700">Immediate Termination</span>
+            </div>
+
+            <div className="space-y-2.5 pt-1">
+              {recordedViolations.map((v, idx) => (
+                <div key={idx} className="flex items-start gap-3 p-3 rounded-xl bg-white border border-rose-200/80 text-xs shadow-2xs">
+                  <span className="w-6 h-6 rounded-full bg-rose-600 text-white font-bold flex items-center justify-center text-[11px] shrink-0">
+                    {idx + 1}
+                  </span>
+                  <div className="flex-1">
+                    <div className="font-bold text-slate-900">{v.message}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      Violation Code: <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-700">{v.type}</code> • Logged at {new Date(v.timestamp).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {recordedViolations.length === 0 && (
+                <div className="text-xs text-slate-500 p-2">
+                  3 security/proctoring strikes recorded (tab switch, exit fullscreen, or unauthorized visual/audio signal).
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4 border-t border-slate-100">
+            <button
+              onClick={onExit}
+              className="w-full sm:w-auto px-5 py-2.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors flex items-center justify-center gap-1.5"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Opportunities</span>
+            </button>
+            <button
+              onClick={handleRetake}
+              disabled={preparingRetake}
+              className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>{preparingRetake ? 'Initializing Fresh Test...' : 'Retake Proctored Exam'}</span>
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
