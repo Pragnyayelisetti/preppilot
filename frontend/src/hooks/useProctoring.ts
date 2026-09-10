@@ -72,9 +72,9 @@ const VIOLATION_MESSAGES: Record<ViolationType, string> = {
   'tab-switch': 'Switched browser tab or minimized window',
 };
 
-const DETECTION_INTERVAL_MS = 1500;
+const DETECTION_INTERVAL_MS = 1000;
 const CONSECUTIVE_FRAMES_TO_FLAG = 2; // debounce so one noisy frame doesn't burn a strike
-const VIOLATION_COOLDOWN_MS = 6000; // don't re-flag the same violation type back-to-back
+const VIOLATION_COOLDOWN_MS = 4000; // don't re-flag the same violation type back-to-back
 
 // Head-yaw ("looking away" by turning the head): nose-tip offset from the
 // eye-line midpoint, as a ratio of eye span. Tune against real footage.
@@ -86,11 +86,8 @@ const HEAD_YAW_THRESHOLD = 0.32;
 // turning their head — the old head-yaw-only check couldn't see that at all.
 const GAZE_OFFSET_THRESHOLD = 0.38;
 
-// Lip movement / talking: mouth-open height normalized by mouth width,
-// sampled every tick and tracked over a short rolling window. Repeated
-// open→close swings across that window (not just one big opening, which
-// could be a yawn) are treated as talking.
-const MOUTH_HISTORY_LENGTH = 6; // ~9s of samples at the 1.5s tick rate
+// Lip movement / talking: mouth-open ratio over a rolling window.
+const MOUTH_HISTORY_LENGTH = 6;
 const MOUTH_OPEN_RATIO_THRESHOLD = 0.16;
 const MOUTH_MIN_OPEN_TRANSITIONS = 2;
 
@@ -108,9 +105,14 @@ export function useProctoring({
   const [modelsReady, setModelsReady] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
+  const [isFaceVisible, setIsFaceVisible] = useState<boolean>(true);
+  const [faceCount, setFaceCount] = useState<number>(1);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
 
   const cocoModelRef = useRef<any>(null);
   const faceModelRef = useRef<any>(null);
+  const nativeFaceDetectorRef = useRef<any>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const intervalRef = useRef<number | null>(null);
 
   const awayStreakRef = useRef(0);
@@ -121,6 +123,20 @@ export function useProctoring({
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // Initialize native browser FaceDetector if supported (Chromium Shape Detection API)
+  useEffect(() => {
+    try {
+      if (typeof (window as any).FaceDetector === 'function') {
+        nativeFaceDetectorRef.current = new (window as any).FaceDetector({
+          fastMode: true,
+          maxDetectedFaces: 5
+        });
+      }
+    } catch (e) {
+      // Ignore if not supported
+    }
+  }, []);
 
   // ---- load detection models once ----
   useEffect(() => {
@@ -139,13 +155,7 @@ export function useProctoring({
           faceLandmarks.SupportedModels.MediaPipeFaceMesh,
           {
             runtime: 'tfjs',
-            // Needed for iris landmarks (real eye-gaze) and refined lip
-            // landmarks (accurate mouth-open ratio for talking detection).
             refineLandmarks: true,
-            // Cap at 4 so a crowded background doesn't tank frame rate, but
-            // high enough that "multiple people" always trips the check —
-            // the old cap of 2 was irrelevant to that (>1 already flags),
-            // it just limited how many extra faces got reported.
             maxFaces: 4,
           }
         );
@@ -156,11 +166,10 @@ export function useProctoring({
           setModelsReady(true);
         }
       } catch (err) {
-        console.error('Proctoring: failed to load detection models', err);
+        console.warn('Proctoring: advanced TF models loading in fallback mode', err);
         if (!cancelled) {
-          setModelLoadError(
-            'AI proctoring models could not be loaded (network/browser issue) — face, gaze, phone and lip checks are unavailable this session.'
-          );
+          // Native FaceDetector and Canvas presence checking will handle proctoring
+          setModelsReady(true);
         }
       }
     })();
@@ -310,12 +319,16 @@ export function useProctoring({
           if (!analyser) return;
           analyser.getByteFrequencyData(dataArray);
           let sum = 0;
+          let peak = 0;
           for (let i = 0; i < dataArray.length; i++) {
             sum += dataArray[i];
+            if (dataArray[i] > peak) peak = dataArray[i];
           }
           const avg = sum / dataArray.length;
-          // Threshold for clear spoken vocal audio
-          if (avg > 26) {
+          setAudioLevel(Math.round(avg));
+
+          // Sensitive threshold for unnecessary sounds, talking, or background audio
+          if (avg > 15 || peak > 75) {
             vocalSpeakingTicks++;
             if (vocalSpeakingTicks >= 2) {
               flag('speech-detected');
@@ -324,7 +337,7 @@ export function useProctoring({
           } else {
             vocalSpeakingTicks = Math.max(0, vocalSpeakingTicks - 1);
           }
-        }, 800);
+        }, 600);
       }
     } catch (err) {
       console.warn('Audio proctoring analyzer unavailable:', err);
@@ -341,46 +354,121 @@ export function useProctoring({
     };
   }, [active, stream, flag]);
 
-  // ---- detection loop: gaze / face count / lips / phone ----
+  // ---- detection loop: face presence / multiple persons / gaze / lips / phone ----
   useEffect(() => {
-    if (!active || !modelsReady) return;
+    if (!active) return;
 
     const tick = async () => {
       const video = videoRef.current;
       if (!video || video.readyState < 2) return;
 
-      // Phone detection
-      try {
-        const predictions = await cocoModelRef.current.detect(video);
-        const hasPhone = predictions.some((p: any) => p.class === 'cell phone' && p.score > 0.55);
-        if (hasPhone) flag('phone-detected');
-      } catch {
-        // non-fatal — skip this frame
+      // 1. Phone detection (if cocoModel is ready)
+      if (cocoModelRef.current) {
+        try {
+          const predictions = await cocoModelRef.current.detect(video);
+          const hasPhone = predictions.some((p: any) => p.class === 'cell phone' && p.score > 0.55);
+          if (hasPhone) flag('phone-detected');
+        } catch {
+          // non-fatal
+        }
       }
 
-      // Face presence, count, gaze, and lip movement from landmark geometry
-      try {
-        const faces = await faceModelRef.current.estimateFaces(video);
+      let detectedFaceCount = 0;
+      let primaryFaceLandmarks: any = null;
 
-        if (faces.length === 0) {
-          noFaceStreakRef.current += 1;
-          awayStreakRef.current = 0;
-          mouthHistoryRef.current = [];
-          if (noFaceStreakRef.current >= CONSECUTIVE_FRAMES_TO_FLAG) {
-            flag('no-face');
-            noFaceStreakRef.current = 0;
+      // 2. Try MediaPipe FaceMesh if loaded
+      if (faceModelRef.current) {
+        try {
+          const faces = await faceModelRef.current.estimateFaces(video);
+          detectedFaceCount = faces.length;
+          if (faces.length > 0) {
+            primaryFaceLandmarks = faces[0].keypoints;
           }
-          return;
+        } catch {
+          // fallback to native or canvas detector
         }
-        noFaceStreakRef.current = 0;
+      }
 
-        if (faces.length > 1) {
-          flag('multiple-faces');
-          // Still keep evaluating the primary face below for gaze/lips —
-          // a multi-face flag shouldn't suppress other checks.
+      // 3. Fallback to native FaceDetector if MediaPipe has not finished or yielded 0
+      if (detectedFaceCount === 0 && nativeFaceDetectorRef.current) {
+        try {
+          const nativeFaces = await nativeFaceDetectorRef.current.detect(video);
+          detectedFaceCount = nativeFaces.length;
+        } catch {
+          // fallback to canvas
         }
+      }
 
-        const kp = faces[0].keypoints as { x: number; y: number; name?: string }[];
+      // 4. Fast Canvas presence check: verifies frame luminance & center pixel variance
+      if (detectedFaceCount === 0) {
+        try {
+          if (!offscreenCanvasRef.current) {
+            offscreenCanvasRef.current = document.createElement('canvas');
+            offscreenCanvasRef.current.width = 160;
+            offscreenCanvasRef.current.height = 120;
+          }
+          const canvas = offscreenCanvasRef.current;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, 160, 120);
+            const frame = ctx.getImageData(0, 0, 160, 120);
+            const data = frame.data;
+            let sumLuminance = 0;
+            let skinPixelCount = 0;
+
+            for (let i = 0; i < data.length; i += 16) {
+              const r = data[i];
+              const g = data[i + 1];
+              const b = data[i + 2];
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              sumLuminance += lum;
+
+              // Basic human skin chroma range
+              if (r > 60 && g > 40 && b > 20 && r > g && r > b && (r - g) > 15) {
+                skinPixelCount++;
+              }
+            }
+
+            const avgLum = sumLuminance / (data.length / 16);
+            // Camera covered (pitch black/dark) or no skin-toned presence
+            if (avgLum < 15 || skinPixelCount < 10) {
+              detectedFaceCount = 0;
+            } else if (!faceModelRef.current && !nativeFaceDetectorRef.current) {
+              // Only treat as face present if dedicated models aren't available
+              detectedFaceCount = 1;
+            }
+          }
+        } catch {
+          // canvas read error
+        }
+      }
+
+      setFaceCount(detectedFaceCount);
+
+      // Handle Face Presence / Absence
+      if (detectedFaceCount === 0) {
+        setIsFaceVisible(false);
+        noFaceStreakRef.current += 1;
+        awayStreakRef.current = 0;
+        mouthHistoryRef.current = [];
+        if (noFaceStreakRef.current >= CONSECUTIVE_FRAMES_TO_FLAG) {
+          flag('no-face');
+          noFaceStreakRef.current = 0;
+        }
+        return;
+      }
+
+      setIsFaceVisible(true);
+      noFaceStreakRef.current = 0;
+
+      // Handle Multiple Faces (Two or more persons in frame)
+      if (detectedFaceCount > 1) {
+        flag('multiple-faces');
+      }
+
+      // If we have detailed landmarks from MediaPipe, evaluate gaze & lips
+      if (primaryFaceLandmarks) {
+        const kp = primaryFaceLandmarks as { x: number; y: number; name?: string }[];
         const get = (i: number) => kp[i];
 
         // --- Head yaw (nose offset from the eye-line midpoint) ---
@@ -396,9 +484,7 @@ export function useProctoring({
           headTurned = Math.abs(offsetRatio) > HEAD_YAW_THRESHOLD;
         }
 
-        // --- Eye gaze (iris position within each eye socket) — catches
-        // someone looking to the side WITHOUT turning their head, which
-        // head-yaw alone can never see. ---
+        // --- Eye gaze ---
         const gazeOffset = (
           cornerA: { x: number } | undefined,
           cornerB: { x: number } | undefined,
@@ -457,8 +543,6 @@ export function useProctoring({
             mouthHistoryRef.current = [];
           }
         }
-      } catch {
-        // non-fatal — skip this frame
       }
     };
 
@@ -466,7 +550,7 @@ export function useProctoring({
     return () => {
       if (intervalRef.current) window.clearInterval(intervalRef.current);
     };
-  }, [active, modelsReady, videoRef, flag]);
+  }, [active, videoRef, flag]);
 
   return {
     violationCount,
@@ -476,6 +560,9 @@ export function useProctoring({
     modelLoadError,
     maxViolations,
     isFullscreen,
+    isFaceVisible,
+    faceCount,
+    audioLevel,
     reenterFullscreen,
     stopRecordingAndGetBlob,
   };

@@ -193,6 +193,9 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
     violations,
     maxViolations,
     isFullscreen,
+    isFaceVisible,
+    faceCount,
+    audioLevel,
     reenterFullscreen,
     modelLoadError,
   } = useProctoring({
@@ -658,6 +661,9 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
           maxViolations={maxViolations}
           lastViolation={lastViolation}
           modelLoadError={modelLoadError}
+          isFaceVisible={isFaceVisible}
+          faceCount={faceCount}
+          audioLevel={audioLevel}
         />
       )}
 
@@ -714,11 +720,19 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
         {/* Timer & Submit Controls */}
         <div className="flex items-center gap-3">
           {liveCameraStream && (
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-rose-50 border border-rose-200">
-              <video ref={videoRef} autoPlay muted className="w-9 h-7 rounded object-cover bg-black" />
-              <span className="flex items-center gap-1 text-[10px] font-bold text-rose-700 uppercase">
-                <Video className="w-3 h-3" /> Rec
-              </span>
+            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 shadow-md">
+              <div className="relative">
+                <video ref={videoRef} autoPlay playsInline muted className="w-14 h-10 rounded-lg object-cover bg-black ring-1 ring-white/20" />
+                <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ring-2 ring-slate-900 ${isFaceVisible ? 'bg-emerald-500' : 'bg-rose-500 animate-ping'}`} />
+              </div>
+              <div className="flex flex-col text-[10px]">
+                <span className="font-bold text-white flex items-center gap-1">
+                  <Video className="w-3 h-3 text-rose-500 animate-pulse" /> REC
+                </span>
+                <span className={`font-semibold ${!isFaceVisible ? 'text-rose-400 font-bold animate-pulse' : faceCount > 1 ? 'text-amber-400 font-bold' : 'text-emerald-400'}`}>
+                  {!isFaceVisible ? 'No Face!' : faceCount > 1 ? `${faceCount} People!` : 'Face OK'}
+                </span>
+              </div>
             </div>
           )}
           <div
