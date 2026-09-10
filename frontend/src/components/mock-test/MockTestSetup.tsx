@@ -11,11 +11,13 @@ import {
   FileText,
   Award,
   Camera,
+  Mic,
   Maximize,
   ArrowRight,
   ArrowLeft,
   AlertTriangle,
   ShieldCheck,
+  CheckCircle2,
   Loader2
 } from 'lucide-react';
 
@@ -103,19 +105,19 @@ export const MockTestSetup: React.FC<MockTestSetupProps> = ({ onReady, onCancel 
       enteredFullscreen = false;
     }
 
-    // Camera — required. If this fails, the test cannot begin: back out of
-    // full-screen (there's nothing to proctor) and let the person retry.
+    // Camera & Microphone — both required for strict proctoring. If this fails,
+    // the test cannot begin: back out of full-screen and let the candidate retry.
     let stream: MediaStream | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setCameraStream(stream);
     } catch (err) {
-      console.warn('Camera permission denied or unavailable:', err);
+      console.warn('Camera/Microphone permission denied or unavailable:', err);
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
       setCameraError(
-        'Camera access is required to start this proctored test. Please allow camera access in your browser and try again.'
+        'Camera and microphone access are mandatory to start this proctored test. Please grant permissions in your browser and try again.'
       );
       setPreparing(false);
       return;
@@ -123,7 +125,7 @@ export const MockTestSetup: React.FC<MockTestSetupProps> = ({ onReady, onCancel 
 
     if (!enteredFullscreen) {
       setCameraError(
-        'Full-screen mode could not be enabled — please allow it and try again.'
+        'Full-screen mode could not be enabled — full screen is required for test integrity. Please allow it and try again.'
       );
       stream.getTracks().forEach((track) => track.stop());
       setCameraStream(null);
@@ -313,34 +315,66 @@ export const MockTestSetup: React.FC<MockTestSetupProps> = ({ onReady, onCancel 
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5">
-            <div className="font-bold flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> Before you start</div>
-            <ul className="list-disc list-inside space-y-1 pl-1">
-              <li>The test will open in full-screen mode.</li>
+          <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-2">
+            <div className="font-bold flex items-center gap-1.5 text-amber-950">
+              <AlertTriangle className="w-4 h-4 text-amber-700" />
+              <span>Strict Proctored Assessment Regulations</span>
+            </div>
+            <ul className="list-disc list-inside space-y-1.5 pl-1 text-slate-800">
               <li>
-                <strong>Camera access is mandatory</strong> for proctoring — the test cannot start without it.
+                <strong>Camera & Microphone are strictly mandatory</strong>: Visual facial tracking, lip movement detection, and audio speech detection will run continuously.
               </li>
-              <li>Each question carries {test.marksPerQuestion ?? 1} mark(s). There is no negative marking.</li>
-              <li>You can mark questions for review and revisit them before submitting.</li>
               <li>
-                Switching tabs, leaving full screen, looking away, multiple faces, or a phone in frame each
-                count as a violation — 3 violations auto-submits the test.
+                <strong>Full-Screen Lockdown</strong>: The exam opens in full-screen mode. Exiting full-screen or minimizing the window counts as an integrity strike.
               </li>
-              <li>The test auto-submits when the timer runs out.</li>
+              <li>
+                <strong>Tab Switching / Focus Loss</strong>: Switching browser tabs or opening applications is instantly registered as a proctoring violation.
+              </li>
+              <li>
+                <strong>Candidate Environment</strong>: You must be alone in the frame. Looking away, multiple faces, talking/lip movement, or mobile phone detection will trigger strikes.
+              </li>
+              <li>
+                <strong className="text-rose-700">3-Strike Disqualification Rule</strong>: If 3 violations are logged, the proctored exam is immediately terminated, you are forced out, and the assessment is marked disqualified.
+              </li>
             </ul>
           </div>
 
           {cameraError && (
             <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center gap-2">
-              <Camera className="w-4 h-4 shrink-0" />
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{cameraError}</span>
             </div>
           )}
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 shrink-0">
+                <Camera className="w-4 h-4" />
+              </div>
+              <div className="text-xs">
+                <div className="font-semibold text-slate-900">Mandatory Webcam</div>
+                <div className="text-[11px] text-slate-500">Live face, lip movement & phone monitor</div>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 shrink-0">
+                <Mic className="w-4 h-4" />
+              </div>
+              <div className="text-xs">
+                <div className="font-semibold text-slate-900">Mandatory Microphone</div>
+                <div className="text-[11px] text-slate-500">Speech & unauthorized audio detector</div>
+              </div>
+            </div>
+          </div>
+
           {cameraStream && (
             <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
               <video ref={videoRef} autoPlay muted className="w-20 h-14 rounded-lg object-cover bg-black" />
-              <span className="text-xs font-semibold text-emerald-800">Camera active — proctoring ready</span>
+              <div className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Webcam & Microphone verified — AI proctoring active</span>
+              </div>
             </div>
           )}
 
@@ -360,12 +394,12 @@ export const MockTestSetup: React.FC<MockTestSetupProps> = ({ onReady, onCancel 
               {preparing ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Preparing...</span>
+                  <span>Configuring Proctoring...</span>
                 </>
               ) : (
                 <>
                   <Maximize className="w-3.5 h-3.5" />
-                  <span>{cameraError ? 'Retry Camera & Start Test' : 'Enter Full-Screen & Start Test'}</span>
+                  <span>{cameraError ? 'Grant Permissions & Start Proctored Exam' : 'Enter Fullscreen & Begin Proctored Exam'}</span>
                 </>
               )}
             </button>

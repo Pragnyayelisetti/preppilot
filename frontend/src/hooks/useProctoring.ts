@@ -32,6 +32,7 @@ export type ViolationType =
   | 'multiple-faces'
   | 'looking-away'
   | 'lip-movement'
+  | 'speech-detected'
   | 'phone-detected'
   | 'fullscreen-exit'
   | 'tab-switch';
@@ -61,13 +62,14 @@ interface UseProctoringOptions {
 }
 
 const VIOLATION_MESSAGES: Record<ViolationType, string> = {
-  'no-face': 'No face detected in frame',
-  'multiple-faces': 'Multiple faces detected',
-  'looking-away': 'Please face the screen',
-  'lip-movement': 'Talking / lip movement detected',
+  'no-face': 'No face detected in camera frame',
+  'multiple-faces': 'Multiple people detected in camera frame',
+  'looking-away': 'Candidate looking away from exam screen',
+  'lip-movement': 'Talking or lip movement detected',
+  'speech-detected': 'Microphone detected speaking or unauthorized audio',
   'phone-detected': 'Mobile phone detected in frame',
-  'fullscreen-exit': 'You exited full-screen mode',
-  'tab-switch': 'You switched tabs or left the test window',
+  'fullscreen-exit': 'Exited full-screen exam mode',
+  'tab-switch': 'Switched browser tab or minimized window',
 };
 
 const DETECTION_INTERVAL_MS = 1500;
@@ -102,6 +104,7 @@ export function useProctoring({
 }: UseProctoringOptions) {
   const [violationCount, setViolationCount] = useState(0);
   const [lastViolation, setLastViolation] = useState<ProctoringViolation | null>(null);
+  const [violations, setViolations] = useState<ProctoringViolation[]>([]);
   const [modelsReady, setModelsReady] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
@@ -224,6 +227,7 @@ export function useProctoring({
           count: next,
         };
         setLastViolation(violation);
+        setViolations((vList) => [...vList, violation]);
         onViolation?.(violation);
         if (next >= maxViolations && !maxReachedFiredRef.current) {
           maxReachedFiredRef.current = true;
@@ -261,19 +265,81 @@ export function useProctoring({
   }, [active, flag]);
 
   // ---- tab-switch: fires whenever the tab is backgrounded — switching to
-  // another tab, another application, or minimizing the window. This is
-  // independent of the fullscreen check above (you can background a
-  // full-screen tab without ever firing `fullscreenchange`), so both listen
-  // in parallel and both are counted as their own violation type. Like
-  // every other violation, this never stops the camera/recording/test. ----
+  // another tab, another application, or minimizing the window. Also listens to
+  // window blur to catch app switches or multi-monitor focus loss immediately. ----
   useEffect(() => {
     if (!active) return;
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') flag('tab-switch');
     };
+    const handleBlur = () => {
+      flag('tab-switch');
+    };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleBlur);
+    };
   }, [active, flag]);
+
+  // ---- Microphone audio analysis for talking / speech detection ----
+  useEffect(() => {
+    if (!active || !stream) return;
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks || audioTracks.length === 0) return;
+
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let timer: number | null = null;
+
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        audioCtx = new AudioContextClass();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let vocalSpeakingTicks = 0;
+
+        timer = window.setInterval(() => {
+          if (!analyser) return;
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+          // Threshold for clear spoken vocal audio
+          if (avg > 26) {
+            vocalSpeakingTicks++;
+            if (vocalSpeakingTicks >= 2) {
+              flag('speech-detected');
+              vocalSpeakingTicks = 0;
+            }
+          } else {
+            vocalSpeakingTicks = Math.max(0, vocalSpeakingTicks - 1);
+          }
+        }, 800);
+      }
+    } catch (err) {
+      console.warn('Audio proctoring analyzer unavailable:', err);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (source) {
+        try { source.disconnect(); } catch {}
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [active, stream, flag]);
 
   // ---- detection loop: gaze / face count / lips / phone ----
   useEffect(() => {
@@ -405,6 +471,7 @@ export function useProctoring({
   return {
     violationCount,
     lastViolation,
+    violations,
     modelsReady,
     modelLoadError,
     maxViolations,

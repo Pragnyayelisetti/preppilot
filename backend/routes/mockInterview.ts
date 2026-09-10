@@ -260,15 +260,21 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
     })
     .join('\n\n');
 
-  const prompt = `You are a Principal Tech Interviewer evaluating a candidate's mock interview responses.
-Track: ${session.topic || session.track}
+  const prompt = `You are a Principal Tech Interviewer and Executive Communication Coach evaluating a candidate's live spoken mock interview responses.
+Topic: ${session.topic || session.track}
 Company: ${session.company || 'Tech Company'}
-Candidate's Answers, with real-time signals captured during the live session (voice/typing, time taken vs allotted, speaking pace, filler-word count, hints used):
+
+Candidate's Spoken Responses (captured live via microphone speech recognition, along with speaking pace, filler words, and hints):
 ${userAnswersSummary}
 
-Use the bracketed signals to ground your scoring — e.g. heavy filler-word usage or repeated hint usage should lower confidence/communication; running out of time repeatedly should be called out; strong pacing and no hints used should raise confidence. Also check the answers themselves for grammatical mistakes (in typing OR speech) and note specific ones in whatToImprove.
+Thoroughly evaluate their technical answers AND their language, grammar, fluency, and spoken communication delivery.
+Specifically:
+1. Examine the grammar of their spoken responses: identify specific sentence structure flaws, subject-verb agreement issues, tense inconsistencies, or informal phrasing.
+2. Provide specific grammar critiques: original spoken phrase -> grammatically correct polished phrasing -> rule explained.
+3. Provide vocabulary suggestions: words they spoke -> stronger professional engineering/industry vocabulary.
+4. Score them objectively across all dimensions (0-100), including grammarScore, vocabularyScore, and fluencyScore.
 
-Provide a realistic, professional evaluation strictly as JSON:
+Provide your evaluation strictly as valid JSON conforming to this schema:
 {
   "overallScore": 84,
   "communication": 82,
@@ -276,20 +282,40 @@ Provide a realistic, professional evaluation strictly as JSON:
   "problemSolving": 86,
   "confidence": 80,
   "structure": 88,
+  "languageAndGrammar": {
+    "grammarScore": 85,
+    "vocabularyScore": 82,
+    "fluencyScore": 86,
+    "grammarCritiques": [
+      {
+        "originalPhrase": "we was using redis cache to make it faster",
+        "correction": "we were utilizing Redis caching to optimize response latency",
+        "rule": "Subject-verb agreement (plural 'we were') and precise engineering vocabulary."
+      }
+    ],
+    "vocabularySuggestions": [
+      {
+        "spokenWord": "make it faster",
+        "enhancedAlternative": "reduce p99 latency and improve throughput"
+      }
+    ],
+    "deliveryFeedback": "Spoke clearly with good cadence. Minimal filler words detected. Ensure consistent past tense when narrating prior engineering projects."
+  },
   "whatYouDidWell": [
     "Clear explanation of architecture choices",
     "Effective usage of the STAR framework with concrete metrics",
     "Good awareness of trade-offs and edge cases"
   ],
   "whatToImprove": [
+    "Tighten grammatical consistency when switching between project backstory and current design",
     "Elaborate more on error handling and fallback mechanisms",
     "Avoid jumping straight to the complex solution before stating the baseline"
   ],
-  "betterAnswerApproach": "When discussing distributed rate limiters, explicitly mention Redis Token Bucket or Sliding Window Log algorithms with TTL and network partition resilience.",
+  "betterAnswerApproach": "When discussing technical trade-offs, state the problem first, describe the primary mechanism (e.g. Redis sliding window log), and finish with measurable latency and fault-tolerance metrics.",
   "recommendedPractice": [
-    "Practice system design latency estimation numbers",
-    "Rehearse behavioral responses under 90-second time limits",
-    "Review LeetCode top concurrency and synchronization problems"
+    "Practice speaking technical explanations with zero filler words under 90 seconds",
+    "Review distributed systems latency numbers and system design terminology",
+    "Rehearse behavioral responses using the STAR method"
   ]
 }`;
 
@@ -309,7 +335,7 @@ Provide a realistic, professional evaluation strictly as JSON:
     }
 
     if (!evalData) {
-      // High quality fallback evaluation
+      // High quality fallback evaluation with language & grammar breakdown
       evalData = {
         overallScore: 82,
         communication: 84,
@@ -317,19 +343,43 @@ Provide a realistic, professional evaluation strictly as JSON:
         problemSolving: 85,
         confidence: 79,
         structure: 83,
+        languageAndGrammar: {
+          grammarScore: 84,
+          vocabularyScore: 82,
+          fluencyScore: 86,
+          grammarCritiques: [
+            {
+              originalPhrase: 'The system handle the requests by queuing them',
+              correction: 'The system handles requests by queuing them asynchronously',
+              rule: 'Third-person singular agreement: subject "system" takes singular verb "handles".'
+            }
+          ],
+          vocabularySuggestions: [
+            {
+              spokenWord: 'it broke',
+              enhancedAlternative: 'encountered service degradation or partition failure'
+            },
+            {
+              spokenWord: 'good speed',
+              enhancedAlternative: 'sub-50ms p99 latency SLA'
+            }
+          ],
+          deliveryFeedback: 'Articulated thoughts clearly with steady speech cadence. Good conversational confidence with slight reliance on conversational fillers.'
+        },
         whatYouDidWell: [
           'Articulated the core requirements clearly before presenting the final approach',
           'Good logical structure using concrete real-world engineering terminology',
           'Demonstrated clear ownership and problem decomposition'
         ],
         whatToImprove: [
+          'Maintain grammatical consistency when explaining past project outcomes versus current architectures',
           'Quantify your impact more precisely (e.g., latency reduction percentages or throughput numbers)',
           'Address operational monitoring and failure modes proactively'
         ],
         betterAnswerApproach: 'Anchor your technical answers around the CAR framework: Context (the environment and challenge), Action (your specific technical execution), and Result (the measurable latency or business outcome).',
         recommendedPractice: [
+          'Practice recording 2-minute technical answers focused on vocal clarity and grammar',
           'Review distributed systems fundamentals and CAP theorem trade-offs',
-          'Practice 2-minute behavioral drill recordings using the STAR format',
           'Brush up on memory management and database indexing patterns'
         ]
       };
