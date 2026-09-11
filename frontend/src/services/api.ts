@@ -276,6 +276,46 @@ export const api = {
     return res.json();
   },
 
+  async updateWhatsAppSettings(settings: {
+    enabled: boolean;
+    phoneNumber: string;
+    frequency: string;
+    deadlineTimings: string[];
+    notifyNewOpportunities: boolean;
+    notifyApplicationDeadlines: boolean;
+    notifyInterviewReminders: boolean;
+  }) {
+    const res = await fetch('/api/whatsapp/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return res.json();
+  },
+
+  async getWhatsAppDueReminders() {
+    const res = await fetch('/api/whatsapp/due-reminders');
+    return res.json();
+  },
+
+  async markWhatsAppOpened(id?: string, eventId?: string) {
+    const res = await fetch('/api/whatsapp/mark-opened', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, eventId })
+    });
+    return res.json();
+  },
+
+  async generateWhatsAppLink(data: { company?: string; role?: string; deadline?: string; daysRemaining?: number }) {
+    const res = await fetch('/api/whatsapp/generate-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  },
+
   async updateWhatsAppPreferences(preferences: any) {
     const res = await fetch('/api/whatsapp/preferences', {
       method: 'POST',
@@ -285,7 +325,7 @@ export const api = {
     return res.json();
   },
 
-  async sendWhatsAppAlert(data: { title: string; message: string; type?: string }) {
+  async sendWhatsAppAlert(data: { title: string; message?: string; type?: string; company?: string; role?: string; deadline?: string; daysRemaining?: number }) {
     const res = await fetch('/api/whatsapp/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

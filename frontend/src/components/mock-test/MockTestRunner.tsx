@@ -99,6 +99,7 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
   const [liveCameraStream, setLiveCameraStream] = useState<MediaStream | null>(
     cameraStream ?? null
   );
+  const [showTabSwitchAlert, setShowTabSwitchAlert] = useState(false);
 
   // Attach the proctoring camera stream (if any) to the preview element
   useEffect(() => {
@@ -185,7 +186,7 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
     handleSubmitTest();
   };
 
-  const proctoringActive = !!liveCameraStream && !isSubmitted && !loading && !!test;
+  const proctoringActive = !isSubmitted && !loading && !!test;
 
   const {
     violationCount,
@@ -203,6 +204,11 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
     videoRef,
     active: proctoringActive,
     maxViolations: MAX_PROCTORING_VIOLATIONS,
+    onViolation: (v) => {
+      if (v.type === 'tab-switch') {
+        setShowTabSwitchAlert(true);
+      }
+    },
     onMaxViolationsReached: handleMaxViolations,
   });
 
@@ -688,6 +694,36 @@ export const MockTestRunner: React.FC<MockTestRunnerProps> = ({
             >
               <Maximize className="w-3.5 h-3.5" />
               <span>Return to Full-Screen</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Blocking prompt when tab-switch violation occurs */}
+      {showTabSwitchAlert && !isSubmitted && violationCount < maxViolations && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/85 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border-2 border-rose-500 p-6 max-w-md w-full text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-900">Tab Switching Prohibited!</h3>
+              <p className="text-xs text-rose-600 font-semibold">
+                Violation logged: Tab switch or window blur detected
+              </p>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              You moved away or changed focus from the active test tab. Switching tabs, opening secondary apps, or navigating away is strictly prohibited during proctored tests!
+              You have accumulated <strong className="text-rose-600 font-bold">{violationCount}/{maxViolations}</strong> violations.
+            </p>
+            <button
+              onClick={() => {
+                setShowTabSwitchAlert(false);
+                reenterFullscreen();
+              }}
+              className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors"
+            >
+              I Understand — Return to Exam
             </button>
           </div>
         </div>

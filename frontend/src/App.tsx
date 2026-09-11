@@ -28,6 +28,20 @@ const AppContent: React.FC = () => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showGmailModal, setShowGmailModal] = useState(false);
   const [readyMockTest, setReadyMockTest] = useState<{ test: MockTest; stream: MediaStream | null } | null>(null);
+  const [oauthMessage, setOauthMessage] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('gmail_connected') === 'true') {
+      setOauthMessage('Gmail connected successfully! Your recruitment emails and opportunities are synced.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setTimeout(() => setOauthMessage(null), 6000);
+    } else if (params.get('gmail_error')) {
+      setOauthMessage(`Gmail connection issue: ${params.get('gmail_error')}`);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setTimeout(() => setOauthMessage(null), 6000);
+    }
+  }, []);
 
   if (isLoading) {
     return (
@@ -113,6 +127,21 @@ const AppContent: React.FC = () => {
         />
 
         <main className="flex-1 p-4 lg:p-8 max-w-7xl mx-auto w-full">
+          {oauthMessage && (
+            <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-3 animate-fade-in shadow-xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{oauthMessage}</span>
+              </div>
+              <button
+                onClick={() => setOauthMessage(null)}
+                className="text-emerald-700 hover:text-emerald-900 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Dashboard View */}
           {currentView === 'dashboard' && (
             <OverviewDashboard

@@ -43,6 +43,15 @@ export const appState: AppState = {
     connectedGmailAddress: undefined,
     whatsappNumber: '+1 (555) 349-2819',
     whatsappNotificationsEnabled: true,
+    whatsappPreferences: {
+      enabled: true,
+      phoneNumber: '+1 (555) 349-2819',
+      frequency: 'daily',
+      deadlineTimings: ['7_days', '3_days', '1_day', 'on_deadline_day'],
+      notifyNewOpportunities: true,
+      notifyApplicationDeadlines: true,
+      notifyInterviewReminders: true,
+    },
     notificationPreferences: {
       deadlines: true,
       highConfidenceOpportunities: true,
@@ -71,14 +80,23 @@ const STATE_KEY = 'singleton';
  * before the server starts accepting requests.
  */
 export async function loadStateFromDB(): Promise<void> {
-  const existing = await AppStateModel.findOne({ key: STATE_KEY }).lean();
+  try {
+    const mongoose = await import('mongoose');
+    if (mongoose.default.connection.readyState !== 1) {
+      console.log('[state] MongoDB not connected — using in-memory state');
+      return;
+    }
+    const existing = await AppStateModel.findOne({ key: STATE_KEY }).lean();
 
-  if (existing && existing.data) {
-    Object.assign(appState, existing.data);
-    console.log('[state] Loaded saved state from MongoDB');
-  } else {
-    await AppStateModel.create({ key: STATE_KEY, data: appState });
-    console.log('[state] No saved state found — seeded MongoDB with initial data');
+    if (existing && (existing as any).data) {
+      Object.assign(appState, (existing as any).data);
+      console.log('[state] Loaded saved state from MongoDB');
+    } else {
+      await AppStateModel.create({ key: STATE_KEY, data: appState });
+      console.log('[state] No saved state found — seeded MongoDB with initial data');
+    }
+  } catch (err: any) {
+    console.warn('[state] Could not load state from MongoDB, continuing in-memory:', err.message);
   }
 }
 
@@ -89,12 +107,16 @@ export async function loadStateFromDB(): Promise<void> {
  */
 export async function saveStateToDB(): Promise<void> {
   try {
+    const mongoose = await import('mongoose');
+    if (mongoose.default.connection.readyState !== 1) {
+      return;
+    }
     await AppStateModel.updateOne(
       { key: STATE_KEY },
       { $set: { data: appState } },
       { upsert: true }
     );
   } catch (err) {
-    console.error('[state] Failed to save state to MongoDB:', (err as Error).message);
+    console.warn('[state] Failed to save state to MongoDB:', (err as Error).message);
   }
 }

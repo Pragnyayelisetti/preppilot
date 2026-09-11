@@ -65,6 +65,33 @@ export interface Opportunity {
   status: 'discovered' | 'saved' | 'preparing' | 'applied' | 'interviewing' | 'offered' | 'archived';
 }
 
+export type ReminderFrequency =
+  | 'daily'
+  | 'every_2_days'
+  | 'every_3_days'
+  | 'weekly'
+  | 'deadline_only';
+
+export type DeadlineReminderTiming =
+  | '7_days'
+  | '3_days'
+  | '1_day'
+  | 'on_deadline_day';
+
+export interface WhatsAppNotificationPreferences {
+  enabled: boolean;
+  phoneNumber: string;
+  frequency: ReminderFrequency;
+  deadlineTimings: DeadlineReminderTiming[];
+  notifyNewOpportunities: boolean;
+  notifyApplicationDeadlines: boolean;
+  notifyInterviewReminders: boolean;
+  deadlines?: boolean;
+  highConfidenceOpportunities?: boolean;
+  prepReminders?: boolean;
+  mockTestReminders?: boolean;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -85,6 +112,7 @@ export interface UserProfile {
   connectedGmailAddress?: string;
   whatsappNumber?: string;
   whatsappNotificationsEnabled: boolean;
+  whatsappPreferences?: WhatsAppNotificationPreferences;
   notificationPreferences: {
     deadlines: boolean;
     highConfidenceOpportunities: boolean;
@@ -246,8 +274,12 @@ export interface WhatsAppNotification {
   title: string;
   message: string;
   timestamp: string;
-  type: 'deadline' | 'opportunity' | 'prep' | 'mock_test';
+  type: 'deadline' | 'opportunity' | 'interview' | 'prep' | 'mock_test';
   read: boolean;
+  waLink?: string;
+  opportunityId?: string;
+  eventId?: string;
+  status?: 'pending' | 'opened';
 }
 
 export interface ScannedEmail {

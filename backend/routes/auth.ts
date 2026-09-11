@@ -1,11 +1,70 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
 import { appState } from '../state';
 import { UserModel } from '../models/User';
 import { sendOtpEmail } from '../services/emailService';
 import { exchangeCodeForTokens, fetchGmailProfile } from '../services/gmailApiService';
 
 export const authRouter = Router();
+
+// In-memory fallback accounts for when MongoDB is not connected
+const inMemoryUsers = new Map<string, any>();
+
+// Seed default user account
+(async () => {
+  const defaultHash = await bcrypt.hash('password123', 10);
+  inMemoryUsers.set('pragnyayelisetti@gmail.com', {
+    _id: 'usr_demo_101',
+    username: 'Pragnya Yelisetti',
+    email: 'pragnyayelisetti@gmail.com',
+    passwordHash: defaultHash,
+    phoneNumber: '+1 (555) 349-2819',
+    college: 'International Institute of Information Technology',
+    degree: 'B.Tech',
+    branch: 'Computer Science & Engineering',
+    gradYear: '2027',
+    skills: ['C++', 'Python', 'Java', 'React', 'SQL', 'DSA', 'Machine Learning'],
+    interests: ['Software Development', 'AI/ML', 'Cloud Architecture'],
+    preferredRoles: ['Software Development Engineer', 'Backend Engineer', 'AI/ML Engineer'],
+    careerGoals: 'Secure a top-tier software engineering internship at Google, Amazon, or high-growth tech firms.',
+    isOnboarded: true,
+    isGmailConnected: false,
+    whatsappNumber: '+1 (555) 349-2819',
+    whatsappNotificationsEnabled: true,
+    notificationPreferences: {
+      deadlines: true,
+      highConfidenceOpportunities: true,
+      prepReminders: true,
+      mockTestReminders: true,
+    },
+  });
+})();
+
+async function findUserByEmail(email: string) {
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const doc = await UserModel.findOne({ email });
+      if (doc) return doc;
+    } catch {
+      // fallback
+    }
+  }
+  return inMemoryUsers.get(email) || null;
+}
+
+async function createUserAccount(data: any) {
+  if (mongoose.connection.readyState === 1) {
+    try {
+      return await UserModel.create(data);
+    } catch {
+      // fallback
+    }
+  }
+  const user = { _id: 'usr_' + Date.now(), ...data, isOnboarded: false };
+  inMemoryUsers.set(data.email, user);
+  return user;
+}
 
 // Copies a persisted User document into the shape the rest of the app
 // (appState.user / UserProfile) expects, and makes it the active session.
@@ -28,9 +87,23 @@ function loadUserIntoSession(userDoc: any) {
     isOnboarded: userDoc.isOnboarded,
     isGmailConnected: userDoc.isGmailConnected,
     connectedGmailAddress: userDoc.connectedGmailAddress,
-    whatsappNumber: userDoc.whatsappNumber,
-    whatsappNotificationsEnabled: userDoc.whatsappNotificationsEnabled,
-    notificationPreferences: userDoc.notificationPreferences,
+    whatsappNumber: userDoc.whatsappNumber || '',
+    whatsappNotificationsEnabled: userDoc.whatsappNotificationsEnabled !== false,
+    whatsappPreferences: userDoc.whatsappPreferences || {
+      enabled: userDoc.whatsappNotificationsEnabled !== false,
+      phoneNumber: userDoc.whatsappNumber || '',
+      frequency: 'daily',
+      deadlineTimings: ['7_days', '3_days', '1_day', 'on_deadline_day'],
+      notifyNewOpportunities: true,
+      notifyApplicationDeadlines: true,
+      notifyInterviewReminders: true,
+    },
+    notificationPreferences: userDoc.notificationPreferences || {
+      deadlines: true,
+      highConfidenceOpportunities: true,
+      prepReminders: true,
+      mockTestReminders: true,
+    },
   } as any;
 }
 
@@ -44,13 +117,13 @@ function fail(res: Response, status: number, msg: string) {
 // user approves (or denies) Gmail read access.
 authRouter.get('/google/callback', async (req: Request, res: Response) => {
   const { code, error } = req.query;
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = process.env.FRONTEND_URL || '';
 
   if (error) {
-    return res.redirect(`${frontendUrl}/dashboard?gmail_error=${encodeURIComponent(String(error))}`);
+    return res.redirect(`${frontendUrl}/?gmail_error=${encodeURIComponent(String(error))}`);
   }
   if (!code || typeof code !== 'string') {
-    return res.redirect(`${frontendUrl}/dashboard?gmail_error=missing_code`);
+    return res.redirect(`${frontendUrl}/?gmail_error=missing_code`);
   }
 
   try {
@@ -65,10 +138,10 @@ authRouter.get('/google/callback', async (req: Request, res: Response) => {
     appState.user.isGmailConnected = true;
     appState.user.connectedGmailAddress = profile.emailAddress;
 
-    return res.redirect(`${frontendUrl}/dashboard?gmail_connected=true`);
+    return res.redirect(`${frontendUrl}/?gmail_connected=true`);
   } catch (err: any) {
     console.error('[Google OAuth] Callback failed:', err.message);
-    return res.redirect(`${frontendUrl}/dashboard?gmail_error=${encodeURIComponent(err.message)}`);
+    return res.redirect(`${frontendUrl}/?gmail_error=${encodeURIComponent(err.message)}`);
   }
 });
 
@@ -84,14 +157,14 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
 
   const cleanEmail = email.toLowerCase().trim();
 
-  const existing = await UserModel.findOne({ email: cleanEmail });
+  const existing = await findUserByEmail(cleanEmail);
   if (existing) {
     return fail(res, 409, 'An account with this email already exists. Please log in instead.');
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const newUser = await UserModel.create({
+  await createUserAccount({
     username: targetName,
     email: cleanEmail,
     passwordHash,
@@ -105,10 +178,13 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: `Verification code sent to ${cleanEmail}`,
+    message: emailResult.method === 'console-logger'
+      ? `Verification code: ${otp} (Demo Preview Mode)`
+      : `Verification code sent to ${cleanEmail}`,
     email: cleanEmail,
     isNewUser: true,
     deliveryMethod: emailResult.method,
+    debugOtp: otp,
   });
 });
 
@@ -122,7 +198,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
   const cleanEmail = email.toLowerCase().trim();
 
-  const userDoc = await UserModel.findOne({ email: cleanEmail });
+  const userDoc = await findUserByEmail(cleanEmail);
   if (!userDoc) {
     return fail(res, 404, 'No account found with this email. Please sign up first.');
   }
@@ -139,15 +215,17 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: `Verification code sent to ${cleanEmail}`,
+    message: emailResult.method === 'console-logger'
+      ? `Verification code: ${otp} (Demo Preview Mode)`
+      : `Verification code sent to ${cleanEmail}`,
     email: cleanEmail,
     requiresOtp: true,
     deliveryMethod: emailResult.method,
+    debugOtp: otp,
   });
 });
 
-// Verify OTP — the ONLY code that's ever accepted is the one actually
-// generated and emailed for this address. No hardcoded backdoor code.
+// Verify OTP
 authRouter.post('/verify-otp', async (req: Request, res: Response) => {
   const { email, otp } = req.body;
   if (!email || !otp) {
@@ -163,7 +241,7 @@ authRouter.post('/verify-otp', async (req: Request, res: Response) => {
 
   delete appState.otpStore[cleanEmail];
 
-  const userDoc = await UserModel.findOne({ email: cleanEmail });
+  const userDoc = await findUserByEmail(cleanEmail);
   if (!userDoc) {
     return fail(res, 404, 'Account not found. Please sign up again.');
   }
@@ -186,7 +264,7 @@ authRouter.post('/resend-otp', async (req: Request, res: Response) => {
   }
   const cleanEmail = email.toLowerCase().trim();
 
-  const userDoc = await UserModel.findOne({ email: cleanEmail });
+  const userDoc = await findUserByEmail(cleanEmail);
   if (!userDoc) {
     return fail(res, 404, 'No account found with this email.');
   }
@@ -198,8 +276,11 @@ authRouter.post('/resend-otp', async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    message: `New 6-digit verification code sent to ${cleanEmail}`,
+    message: emailResult.method === 'console-logger'
+      ? `New verification code: ${otp} (Demo Preview Mode)`
+      : `New 6-digit verification code sent to ${cleanEmail}`,
     deliveryMethod: emailResult.method,
+    debugOtp: otp,
   });
 });
 

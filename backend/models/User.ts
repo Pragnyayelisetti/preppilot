@@ -28,8 +28,15 @@ const UserSchema = new Schema(
     isOnboarded: { type: Boolean, default: false },
     isGmailConnected: { type: Boolean, default: false },
     connectedGmailAddress: { type: String },
-    whatsappNumber: { type: String },
+    whatsappNumber: { type: String, default: '' },
     whatsappNotificationsEnabled: { type: Boolean, default: true },
+    whatsappPreferences: {
+      frequency: { type: String, default: 'daily' },
+      deadlineTimings: { type: [String], default: ['7_days', '3_days', '1_day', 'on_deadline_day'] },
+      notifyNewOpportunities: { type: Boolean, default: true },
+      notifyApplicationDeadlines: { type: Boolean, default: true },
+      notifyInterviewReminders: { type: Boolean, default: true },
+    },
     notificationPreferences: {
       deadlines: { type: Boolean, default: true },
       highConfidenceOpportunities: { type: Boolean, default: true },
