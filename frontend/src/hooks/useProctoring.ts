@@ -72,9 +72,9 @@ const VIOLATION_MESSAGES: Record<ViolationType, string> = {
   'tab-switch': 'Switched browser tab or minimized window',
 };
 
-const DETECTION_INTERVAL_MS = 1000;
+const DETECTION_INTERVAL_MS = 500;
 const CONSECUTIVE_FRAMES_TO_FLAG = 2; // debounce so one noisy frame doesn't burn a strike
-const VIOLATION_COOLDOWN_MS = 4000; // don't re-flag the same violation type back-to-back
+const VIOLATION_COOLDOWN_MS = 2500; // don't re-flag the same violation type back-to-back
 
 // Head-yaw ("looking away" by turning the head): nose-tip offset from the
 // eye-line midpoint, as a ratio of eye span. Tune against real footage.
@@ -273,22 +273,44 @@ export function useProctoring({
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
   }, [active, flag]);
 
-  // ---- tab-switch: fires whenever the tab is backgrounded — switching to
+  // ---- tab-switch & test tab lock: fires whenever the tab is backgrounded — switching to
   // another tab, another application, or minimizing the window. Also listens to
-  // window blur to catch app switches or multi-monitor focus loss immediately. ----
+  // window blur to catch app switches or multi-monitor focus loss immediately, and
+  // locks navigation away from the exam tab with beforeunload. ----
   useEffect(() => {
     if (!active) return;
+
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') flag('tab-switch');
+      if (document.visibilityState === 'hidden' || document.hidden) {
+        flag('tab-switch');
+      }
     };
+
     const handleBlur = () => {
       flag('tab-switch');
     };
+
+    const handlePageHide = () => {
+      flag('tab-switch');
+    };
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      flag('tab-switch');
+      e.preventDefault();
+      e.returnValue = 'Active proctored exam in progress. Leaving or shifting away from this tab will incur proctoring violations.';
+      return e.returnValue;
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [active, flag]);
 
@@ -362,25 +384,29 @@ export function useProctoring({
       const video = videoRef.current;
       if (!video || video.readyState < 2) return;
 
-      // 1. Phone detection (if cocoModel is ready)
+      // 1. COCO-SSD: Phone detection & Person counting
+      let cocoPersons = 0;
       if (cocoModelRef.current) {
         try {
           const predictions = await cocoModelRef.current.detect(video);
-          const hasPhone = predictions.some((p: any) => p.class === 'cell phone' && p.score > 0.55);
+          const hasPhone = predictions.some((p: any) => p.class === 'cell phone' && p.score > 0.45);
           if (hasPhone) flag('phone-detected');
+
+          const persons = predictions.filter((p: any) => p.class === 'person' && p.score >= 0.35);
+          cocoPersons = persons.length;
         } catch {
           // non-fatal
         }
       }
 
-      let detectedFaceCount = 0;
+      let meshCount = 0;
       let primaryFaceLandmarks: any = null;
 
-      // 2. Try MediaPipe FaceMesh if loaded
+      // 2. MediaPipe FaceMesh
       if (faceModelRef.current) {
         try {
           const faces = await faceModelRef.current.estimateFaces(video);
-          detectedFaceCount = faces.length;
+          meshCount = faces.length;
           if (faces.length > 0) {
             primaryFaceLandmarks = faces[0].keypoints;
           }
@@ -389,17 +415,21 @@ export function useProctoring({
         }
       }
 
-      // 3. Fallback to native FaceDetector if MediaPipe has not finished or yielded 0
-      if (detectedFaceCount === 0 && nativeFaceDetectorRef.current) {
+      let nativeCount = 0;
+      // 3. Native Chrome FaceDetector (Shape Detection API)
+      if (nativeFaceDetectorRef.current) {
         try {
           const nativeFaces = await nativeFaceDetectorRef.current.detect(video);
-          detectedFaceCount = nativeFaces.length;
+          nativeCount = nativeFaces.length;
         } catch {
           // fallback to canvas
         }
       }
 
-      // 4. Fast Canvas presence check: verifies frame luminance & center pixel variance
+      // Maximum face or person count detected across all models
+      let detectedFaceCount = Math.max(cocoPersons, meshCount, nativeCount);
+
+      // 4. Fast Canvas presence check: verifies frame luminance & center pixel variance if 0
       if (detectedFaceCount === 0) {
         try {
           if (!offscreenCanvasRef.current) {
@@ -444,6 +474,12 @@ export function useProctoring({
       }
 
       setFaceCount(detectedFaceCount);
+
+      // Multiple faces / people violation — immediate flag
+      if (detectedFaceCount > 1 || cocoPersons > 1 || meshCount > 1 || nativeCount > 1) {
+        setFaceCount(Math.max(detectedFaceCount, 2));
+        flag('multiple-faces');
+      }
 
       // Handle Face Presence / Absence
       if (detectedFaceCount === 0) {

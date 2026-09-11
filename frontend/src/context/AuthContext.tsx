@@ -37,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await api.getMe();
       if (data?.user) {
         setUser(data.user);
+        localStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
       }
       const gStatus = await api.getGmailStatus();
       if (gStatus) {
@@ -47,12 +48,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Every fresh app load starts logged out — we never auto-restore a
-  // previous session from the backend, so opening (or reloading) the app
-  // always asks for login/signup. Session state only lives in-memory here
-  // for the current page load (see verifyOtp below).
+  // Restore authenticated session across reloads and Google OAuth redirects
   useEffect(() => {
-    setIsLoading(false);
+    const initSession = async () => {
+      const saved = localStorage.getItem('preppilot_active_user');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setUser(parsed);
+        } catch {
+          // ignore parsing errors
+        }
+      }
+
+      // Check if redirected from Google OAuth
+      const urlParams = new URLSearchParams(window.location.search);
+      const isFromGoogle = urlParams.has('gmail_connected') || urlParams.has('gmail_error');
+
+      try {
+        const data = await api.getMe();
+        if (data?.user) {
+          setUser(data.user);
+          localStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
+        }
+        const gStatus = await api.getGmailStatus();
+        if (gStatus) {
+          setHasOpportunities(gStatus.hasFoundOpportunities !== false);
+        }
+      } catch (err) {
+        console.warn('Session verification fallback:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initSession();
   }, []);
 
   const signup = async (name: string, email: string, password?: string, phoneNumber?: string) => {
@@ -81,6 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.verifyOtp({ email, otp });
     if (res.success && res.user) {
       setUser(res.user);
+      localStorage.setItem('preppilot_active_user', JSON.stringify(res.user));
       setPendingEmailForOtp(null);
       setLatestDebugOtp(null);
     }
@@ -99,6 +130,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.updateProfile(updates);
     if (res.success && res.profile) {
       setUser(res.profile);
+      localStorage.setItem('preppilot_active_user', JSON.stringify(res.profile));
     }
   };
 
@@ -132,6 +164,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     api.logout().catch(() => {});
+    localStorage.removeItem('preppilot_active_user');
     setUser(null);
     setPendingEmailForOtp(null);
   };

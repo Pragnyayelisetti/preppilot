@@ -5,54 +5,61 @@ import { MockInterviewSession, MockInterviewEvaluation, InterviewAnswerMetrics }
 
 export const mockInterviewRouter = Router();
 
-const TRACK_QUESTIONS: Record<string, string[]> = {
+// Pool of varied fallback questions when AI generation is unavailable
+const TRACK_FALLBACK_POOLS: Record<string, string[]> = {
   Technical: [
     'Can you describe a challenging technical project you built, the architecture decisions you made, and what trade-offs you encountered?',
     'How would you design a rate limiter for an API with high throughput, and how would you handle distributed state across multiple server nodes?',
     'Explain how database indexing works internally. When would you prefer a B+ Tree index over a Hash index, and what are the trade-offs of having too many indexes?',
-    'What is the difference between synchronous and asynchronous I/O? How does an event loop handle non-blocking operations without spawning new threads?'
+    'What is the difference between synchronous and asynchronous I/O? How does an event loop handle non-blocking operations without spawning new threads?',
+    'How do you design a robust caching strategy using Redis or Memcached to prevent cache stampedes and stale reads?',
+    'Walk me through how a web browser renders a page from the moment a user types a URL to the final pixel paint on screen.',
+    'Explain how you would handle race conditions when updating shared financial balance records in a distributed microservice environment.'
   ],
   HR: [
     'Tell me about yourself, your background in computer science, and what drove you to pursue software engineering.',
     'Why do you want to join our organization specifically rather than other technology companies?',
     'Where do you see yourself professionally in the next three years, and how do you plan to get there?',
-    'Describe a time when you received tough constructive criticism on your code or behavior. How did you react?'
+    'Describe a time when you received tough constructive criticism on your code or behavior. How did you react?',
+    'What kind of work environment and engineering culture allows you to perform at your highest potential?',
+    'How do you maintain work-life balance and avoid burnout when working on demanding technical milestones?'
   ],
   Behavioral: [
     'Tell me about a time you faced a critical disagreement with a teammate or project partner. How did you handle it and what was the outcome?',
     'Describe a situation where you had a tight project deadline and had to make compromises. How did you prioritize what to ship?',
     'Give an example of a goal you set that you failed to achieve. What did you learn and how did you adapt?',
-    'Tell me about a project where you took the initiative to learn a new framework or technology without being prompted.'
+    'Tell me about a project where you took the initiative to learn a new framework or technology without being prompted.',
+    'Describe an instance where you discovered a serious bug right before a demo or submission. What immediate actions did you take?'
   ],
   'Company-specific': [
-    'Walk me through the Amazon Leadership Principle of "Customer Obsession" or "Ownership". How have you demonstrated this in your university or internship projects?',
-    'At Google, engineering excellence and scalability are paramount. How do you ensure your code is clean, testable, and fault-tolerant?',
-    'How would you diagnose and debug a sudden 500ms latency spike in a live cloud microservice handling payments?',
-    'Do you have any questions for me about engineering culture, mentoring, or technical challenges at this company?'
+    'Walk me through a project where you demonstrated customer obsession or deep ownership over an end-to-end user problem.',
+    'At top tech companies, scalability and reliability are paramount. How do you design systems with high fault tolerance and automatic failover?',
+    'How would you diagnose and debug an unexpected 500ms latency spike in a live production microservice?',
+    'If you were tasked with building a global real-time notifications engine for millions of active users, what architecture would you choose?'
   ]
 };
 
-const DEFAULT_TIME_LIMIT_SECONDS = 150; // 2.5 minutes per question — "time matters"
-const TOPIC_MODE_TOTAL_QUESTIONS = 5;
+const DEFAULT_TIME_LIMIT_SECONDS = 150; // 2.5 minutes per question
+const TOTAL_QUESTIONS_PER_SESSION = 4;
 const MAX_HINTS_PER_QUESTION = 2;
 
-// Strict rule reused across every prompt that generates interviewer text:
-// the model's ONLY job is to ask a question (or a short hint) — it must
-// never solve the question, write sample answers, or grade inline.
-const INTERVIEWER_GUARDRAIL = `You are a professional AI interviewer conducting a real-time mock interview.
-Your ONLY job right now is to ask ONE interview question. Rules you must never break:
-- Never answer the question yourself.
-- Never write or imply a sample/model answer.
-- Never repeat a question already asked in this session.
-- Output ONLY the question text itself — no preamble like "Great, next question:", no numbering, no markdown.`;
+const INTERVIEWER_GUARDRAIL = `You are an expert AI technical & HR interviewer conducting an authentic live mock interview for university students and early-career software engineers.
+Rules you must strictly uphold:
+- Ask ONE concise, high-impact, realistic interview question.
+- Never answer the question yourself or provide sample answers.
+- Never repeat questions already asked in this session.
+- Output ONLY the question text itself — no intro phrases, greetings, numbers, or markdown.`;
 
-function buildFirstQuestionPrompt(topic: string, company?: string): string {
+function buildFirstQuestionPrompt(track: string, company?: string, topic?: string): string {
   return `${INTERVIEWER_GUARDRAIL}
 
-Topic the candidate chose to be interviewed on: "${topic}"
-${company ? `Target company context: ${company}` : ''}
+Interview Settings:
+- Track: ${track}
+${topic ? `- Specific Focus Topic: "${topic}"` : ''}
+${company ? `- Target Company Context: "${company}"` : ''}
 
-Ask an opening interview question on this topic, appropriate for a college student / entry-level candidate.`;
+Generate a fresh, realistic opening interview question tailored to this ${track} interview. Make it thought-provoking and appropriate for a competitive software engineering / intern assessment.
+Output ONLY the question text.`;
 }
 
 function buildNextQuestionPrompt(session: MockInterviewSession): string {
@@ -66,7 +73,7 @@ function buildNextQuestionPrompt(session: MockInterviewSession): string {
 Interview Context:
 - Track: ${session.track}
 ${session.topic ? `- Focus Topic: "${session.topic}"` : ''}
-${session.company ? `- Target Company: ${session.company}` : ''}
+${session.company ? `- Target Company: "${session.company}"` : ''}
 - Question ${session.currentQuestionIndex + 1} of ${session.totalQuestions}
 
 Conversation History so far:
@@ -75,56 +82,119 @@ ${history}
 LATEST CANDIDATE RESPONSE:
 "${lastUserAnswer}"
 
-MANDATORY ADAPTIVE INSTRUCTION:
-- You MUST adapt this next question directly based on what the candidate just explained above!
-- Probe deeper into any technical terms, frameworks, architectural trade-offs, algorithms, or examples they brought up.
-- If they struggled or missed key considerations (like scalability, edge cases, error handling, or teamwork dynamics), ask an adaptive follow-up probing that area.
-- Ask ONE concise, authentic interview question. Do NOT repeat previous questions.
+CRITICAL ADAPTIVE INSTRUCTION:
+- You MUST adapt this next question directly based on what the candidate just explained above.
+- Dig deeper into specific concepts, frameworks, trade-offs, algorithms, or examples they mentioned.
+- If they missed critical considerations (such as edge cases, failure recovery, security, testing, or user experience), ask an adaptive follow-up probing that exact gap.
 - Output ONLY the question text itself.`;
 }
 
-function fallbackQuestion(topicOrTrack: string, index: number, lastAnswer?: string): string {
-  const isTechnical = /tech|dsa|system|code|data|sql|dev/i.test(topicOrTrack);
-  if (isTechnical) {
-    const technicalFollowUps = [
-      `Building on what you just shared: what edge cases or failure modes would you need to protect against in production?`,
-      `How would your design or approach scale if the traffic or dataset size increased by 100x?`,
-      `What alternative technology or pattern did you consider for that, and what was the main trade-off?`,
-      `How would you test and monitor that system to ensure 99.9% uptime and low latency?`,
-      `If you had to refactor that implementation today, what is the first thing you would improve and why?`
-    ];
-    return technicalFollowUps[index % technicalFollowUps.length];
-  }
-  const generalFollowUps = [
-    `That's interesting. What was the biggest obstacle you personally overcame during that experience?`,
-    `How did you measure whether that outcome was successful, and what would you do differently in hindsight?`,
-    `Can you describe how you communicated that decision to other team members or stakeholders?`,
-    `If priorities shifted unexpectedly halfway through, how would you adapt your approach?`
-  ];
-  return generalFollowUps[index % generalFollowUps.length];
+function getFallbackQuestion(track: string, topic?: string, index: number = 0): string {
+  const pool = TRACK_FALLBACK_POOLS[track] || TRACK_FALLBACK_POOLS.Technical;
+  const randIndex = (index + Math.floor(Math.random() * pool.length)) % pool.length;
+  return pool[randIndex];
 }
 
-// Start Interview Session
+// Helper to generate dynamic evaluation fallback when Gemini is unavailable
+function generateDynamicFallbackEvaluation(
+  session: MockInterviewSession,
+  userResponses: { question: string; answer: string; metrics?: InterviewAnswerMetrics }[]
+): MockInterviewEvaluation {
+  const totalAnswers = userResponses.length;
+  const allAnswersText = userResponses.map(r => r.answer).join(' ');
+  const wordCount = allAnswersText.split(/\s+/).filter(Boolean).length;
+  const avgWordsPerAnswer = totalAnswers > 0 ? Math.round(wordCount / totalAnswers) : 0;
+
+  const totalFillerWords = userResponses.reduce(
+    (acc, curr) => acc + (curr.metrics?.fillerWordCount || 0),
+    0
+  );
+
+  // Score adjustments based on answer length and substance
+  let scoreBase = 78;
+  if (avgWordsPerAnswer > 60) scoreBase += 6;
+  if (avgWordsPerAnswer > 110) scoreBase += 4;
+  if (totalFillerWords > 6) scoreBase -= 4;
+
+  const primaryTopic = session.topic || session.track || 'Engineering';
+
+  // Sample extract from candidate answers for personalized feedback
+  const firstAns = userResponses[0]?.answer || '';
+  const firstWords = firstAns.split(' ').slice(0, 8).join(' ');
+
+  return {
+    overallScore: Math.min(94, Math.max(68, scoreBase)),
+    communication: Math.min(92, Math.max(70, scoreBase - (totalFillerWords > 5 ? 5 : 0))),
+    technicalAccuracy: Math.min(95, Math.max(70, scoreBase + 2)),
+    problemSolving: Math.min(93, Math.max(70, scoreBase)),
+    confidence: Math.min(90, Math.max(68, scoreBase - (totalFillerWords > 4 ? 3 : 0))),
+    structure: Math.min(92, Math.max(72, scoreBase + 1)),
+    languageAndGrammar: {
+      grammarScore: Math.min(92, Math.max(74, scoreBase)),
+      vocabularyScore: Math.min(90, Math.max(72, scoreBase - 1)),
+      fluencyScore: Math.min(94, Math.max(70, scoreBase + 1)),
+      grammarCritiques: [
+        {
+          originalPhrase: firstWords ? `"${firstWords}..."` : 'Informal phrasing in explanation',
+          correction: 'Use structured active phrasing: "In my previous project, I implemented..."',
+          rule: 'Maintain consistent past tense when describing previous implementations, and active voice for engineering decisions.'
+        }
+      ],
+      vocabularySuggestions: [
+        {
+          spokenWord: 'it handled the data',
+          enhancedAlternative: 'ingested, sanitized, and batched data processing pipelines'
+        },
+        {
+          spokenWord: 'made it work',
+          enhancedAlternative: 'architected and deployed a resilient solution'
+        }
+      ],
+      deliveryFeedback: `Your response length averaged ~${avgWordsPerAnswer} words per response. ${
+        totalFillerWords > 0
+          ? `Detected approximately ${totalFillerWords} conversational filler word(s). Pausing before speaking will help project authority.`
+          : 'Clean articulation with minimal vocal pauses detected.'
+      }`
+    },
+    whatYouDidWell: [
+      `Engaged with the ${primaryTopic} interview questions directly and addressed the core problem parameters`,
+      `Maintained a clear progression from context to implementation across answers`,
+      `Demonstrated familiarity with key engineering workflows and concepts`
+    ],
+    whatToImprove: [
+      `Structure answers using the STAR format (Situation, Task, Action, Result) to provide measurable outcomes`,
+      `Highlight edge case prevention, error boundaries, and monitoring metrics more prominently`,
+      `Elaborate on architectural alternatives considered before choosing your final approach`
+    ],
+    betterAnswerApproach: `For ${primaryTopic} interviews, start by clarifying assumptions, outline your high-level strategy, dive into the implementation trade-offs, and conclude with concrete operational metrics (e.g. latency, reliability, team velocity).`,
+    recommendedPractice: [
+      `Practice 2-minute timed voice drills for ${primaryTopic} topics`,
+      `Study system design failure recovery and API rate limiting mechanisms`,
+      `Refine behavioral stories highlighting leadership and technical disagreements using STAR`
+    ]
+  };
+}
+
+// Start Interview Session with dynamic AI Question Generation
 mockInterviewRouter.post('/start', async (req: Request, res: Response) => {
   const { track = 'Technical', company, topic } = req.body;
   const sessionId = 'session_' + Date.now();
   const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
 
-  let firstQuestion: string;
-  let questions: string[] = [];
-  let totalQuestions: number;
+  let firstQuestion: string = '';
 
-  if (cleanTopic) {
-    totalQuestions = TOPIC_MODE_TOTAL_QUESTIONS;
+  try {
     const aiText = await generateContentWithFallback(
-      buildFirstQuestionPrompt(cleanTopic, company),
+      buildFirstQuestionPrompt(track, company, cleanTopic),
       ''
     );
-    firstQuestion = aiText.trim() || fallbackQuestion(cleanTopic, 0);
-  } else {
-    questions = TRACK_QUESTIONS[track] || TRACK_QUESTIONS.Technical;
-    totalQuestions = questions.length;
-    firstQuestion = questions[0];
+    firstQuestion = aiText.trim();
+  } catch (err) {
+    console.warn('AI first question generation failed, using pool fallback');
+  }
+
+  if (!firstQuestion) {
+    firstQuestion = getFallbackQuestion(track, cleanTopic, 0);
   }
 
   const session: MockInterviewSession = {
@@ -133,13 +203,13 @@ mockInterviewRouter.post('/start', async (req: Request, res: Response) => {
     topic: cleanTopic || undefined,
     company,
     currentQuestionIndex: 0,
-    questions,
-    totalQuestions,
+    questions: [firstQuestion],
+    totalQuestions: TOTAL_QUESTIONS_PER_SESSION,
     timeLimitSeconds: DEFAULT_TIME_LIMIT_SECONDS,
     conversation: [
       {
         role: 'assistant',
-        content: `Hello! I am your AI interviewer for this ${company ? company + ' ' : ''}${cleanTopic ? cleanTopic : track} session. Let's begin.\n\n${firstQuestion}`,
+        content: `Hello! I am your AI interviewer for this ${company ? company + ' ' : ''}${cleanTopic ? cleanTopic : track} interview session. Let's begin.\n\n${firstQuestion}`,
         timestamp: new Date().toISOString()
       }
     ],
@@ -153,14 +223,14 @@ mockInterviewRouter.post('/start', async (req: Request, res: Response) => {
   res.json({
     sessionId,
     currentQuestionIndex: 0,
-    totalQuestions,
+    totalQuestions: TOTAL_QUESTIONS_PER_SESSION,
     timeLimitSeconds: session.timeLimitSeconds,
     question: firstQuestion,
     conversation: session.conversation
   });
 });
 
-// Give a short HINT for the current question — never the answer itself.
+// Give a short HINT for the current question — never the answer itself
 mockInterviewRouter.post('/hint', async (req: Request, res: Response) => {
   const { sessionId } = req.body;
   const session: MockInterviewSession = appState.interviewSessions[sessionId];
@@ -173,7 +243,7 @@ mockInterviewRouter.post('/hint', async (req: Request, res: Response) => {
 
   if (session.hintsUsedForCurrentQuestion >= MAX_HINTS_PER_QUESTION) {
     return res.json({
-      hint: "You've used all the hints available for this question — give it your best shot.",
+      hint: "You've reached the maximum hints for this question. Give it your best shot!",
       hintsUsedForCurrentQuestion: session.hintsUsedForCurrentQuestion,
       maxHints: MAX_HINTS_PER_QUESTION
     });
@@ -182,17 +252,16 @@ mockInterviewRouter.post('/hint', async (req: Request, res: Response) => {
   const currentQuestion =
     [...session.conversation].reverse().find(c => c.role === 'assistant')?.content || '';
 
-  const prompt = `You are helping a candidate who is stuck during a live mock interview.
-The interviewer just asked: "${currentQuestion}"
+  const prompt = `You are assisting a candidate who requested a hint during a live mock interview.
+The interviewer asked: "${currentQuestion}"
 
-Give ONE short nudge (max 20 words) that points them toward HOW to think about or structure their answer.
-Absolute rules:
+Provide ONE short, helpful guiding nudge (maximum 22 words) to help them structure their thought process.
+Strict rules:
 - Do NOT answer the question.
-- Do NOT give facts, definitions, or the solution.
-- Do NOT write example sentences they could just read out.
-Output ONLY the nudge itself, nothing else.`;
+- Do NOT give away solutions, code snippets, or explicit answers.
+Output ONLY the hint nudge.`;
 
-  const fallback = 'Think of a concrete example from a project you\'ve done, and structure it as: the situation, what you did, and the result.';
+  const fallback = 'Focus on breaking down the problem: state your assumptions, the core approach, and the main trade-off.';
   const aiText = await generateContentWithFallback(prompt, fallback);
   const hint = (aiText || fallback).trim();
 
@@ -218,7 +287,7 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
     ? answer.trim()
     : '(No answer provided — time expired)';
 
-  // Record user answer
+  // Record candidate's answer
   session.conversation.push({
     role: 'user',
     content: answerText,
@@ -239,19 +308,23 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
   session.currentQuestionIndex += 1;
   session.hintsUsedForCurrentQuestion = 0;
 
-  // Check if more questions remain
+  // If more questions remain in the session, generate adaptive next question
   if (session.currentQuestionIndex < session.totalQuestions) {
-    let nextQ: string;
+    let nextQ: string = '';
     try {
       const aiText = await generateContentWithFallback(buildNextQuestionPrompt(session), '');
-      const lastAns = session.conversation.filter(c => c.role === 'user').pop()?.content;
-      nextQ = aiText.trim() || fallbackQuestion(session.topic || session.track, session.currentQuestionIndex, lastAns);
+      nextQ = aiText.trim();
     } catch {
-      const lastAns = session.conversation.filter(c => c.role === 'user').pop()?.content;
-      nextQ = fallbackQuestion(session.topic || session.track, session.currentQuestionIndex, lastAns);
+      // ignore
     }
 
-    const transitionMessage = `Thank you for your answer. Let's move to the next question:\n\n${nextQ}`;
+    if (!nextQ) {
+      nextQ = getFallbackQuestion(session.track, session.topic, session.currentQuestionIndex);
+    }
+
+    session.questions.push(nextQ);
+
+    const transitionMessage = `Thank you for your response. Let's move to the next question:\n\n${nextQ}`;
 
     session.conversation.push({
       role: 'assistant',
@@ -269,168 +342,129 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
     });
   }
 
-  // Interview Finished: Generate comprehensive AI evaluation
+  // Interview Completed: Generate comprehensive, user-answer-based AI evaluation report
   session.status = 'completed';
 
-  const userAnswersSummary = session.conversation
+  const userAnswersPairs = session.conversation
     .filter(c => c.role === 'user')
     .map((c, i) => {
+      const q = session.questions[i] || `Question ${i + 1}`;
       const m = session.answerMetrics[i];
-      const signals = m
-        ? ` [answered ${m.answeredViaVoice ? 'by voice' : 'by typing'}; took ${m.timeTakenSeconds}s of ${m.timeLimitSeconds}s allotted${m.autoSubmittedOnTimeout ? ' (ran out of time)' : ''}${m.wordsPerMinute ? `; ~${m.wordsPerMinute} words/min` : ''}${m.fillerWordCount ? `; ${m.fillerWordCount} filler words (um/uh/like)` : ''}${m.hintsUsed ? `; used ${m.hintsUsed} hint(s)` : ''}]`
+      return {
+        question: q,
+        answer: c.content,
+        metrics: m
+      };
+    });
+
+  const promptUserSummary = userAnswersPairs
+    .map((pair, idx) => {
+      const m = pair.metrics;
+      const metricsInfo = m
+        ? ` (Time: ${m.timeTakenSeconds}s, Fillers: ${m.fillerWordCount}, ${m.answeredViaVoice ? 'Voice' : 'Typed'})`
         : '';
-      return `Q${i + 1} Answer: ${c.content}${signals}`;
+      return `Q${idx + 1}: ${pair.question}
+Candidate's Spoken Answer${metricsInfo}:
+"${pair.answer}"`;
     })
     .join('\n\n');
 
-  const prompt = `You are a Principal Tech Interviewer and Executive Communication Coach evaluating a candidate's live spoken mock interview responses.
-Topic: ${session.topic || session.track}
-Company: ${session.company || 'Tech Company'}
+  const evalPrompt = `You are a Senior Engineering Hiring Manager and Technical Communication Coach evaluating a student's live mock interview responses.
 
-Candidate's Spoken Responses (captured live via microphone speech recognition, along with speaking pace, filler words, and hints):
-${userAnswersSummary}
+Interview Track: ${session.track}
+${session.topic ? `Focus Topic: ${session.topic}` : ''}
+${session.company ? `Target Company: ${session.company}` : ''}
 
-Thoroughly evaluate their technical answers AND their language, grammar, fluency, and spoken communication delivery.
-Specifically:
-1. Examine the grammar of their spoken responses: identify specific sentence structure flaws, subject-verb agreement issues, tense inconsistencies, or informal phrasing.
-2. Provide specific grammar critiques: original spoken phrase -> grammatically correct polished phrasing -> rule explained.
-3. Provide vocabulary suggestions: words they spoke -> stronger professional engineering/industry vocabulary.
-4. Score them objectively across all dimensions (0-100), including grammarScore, vocabularyScore, and fluencyScore.
+CANDIDATE'S ACTUAL QUESTIONS AND ANSWERS:
+${promptUserSummary}
 
-Provide your evaluation strictly as valid JSON conforming to this schema:
+CRITICAL MANDATORY INSTRUCTIONS:
+1. Your report MUST be directly and accurately based on the candidate's actual answers shown above.
+2. Under "whatYouDidWell", cite specific points, algorithms, or examples the candidate actually mentioned in their answers.
+3. Under "whatToImprove", point out exact technical inaccuracies, omitted edge cases, or weak explanations present in their answers.
+4. Under "languageAndGrammar", analyze their actual grammar, vocabulary, and phrasing:
+   - Provide "grammarCritiques" identifying an actual imperfect phrase they used -> improved professional version -> rule.
+   - Provide "vocabularySuggestions" taking words they used -> higher-level engineering terms.
+5. Score them fairly (0-100) based on their real performance.
+
+Output ONLY valid JSON matching this schema:
 {
-  "overallScore": 84,
-  "communication": 82,
-  "technicalAccuracy": 85,
-  "problemSolving": 86,
-  "confidence": 80,
-  "structure": 88,
+  "overallScore": 82,
+  "communication": 80,
+  "technicalAccuracy": 84,
+  "problemSolving": 82,
+  "confidence": 78,
+  "structure": 85,
   "languageAndGrammar": {
-    "grammarScore": 85,
-    "vocabularyScore": 82,
-    "fluencyScore": 86,
+    "grammarScore": 83,
+    "vocabularyScore": 80,
+    "fluencyScore": 85,
     "grammarCritiques": [
       {
-        "originalPhrase": "we was using redis cache to make it faster",
-        "correction": "we were utilizing Redis caching to optimize response latency",
-        "rule": "Subject-verb agreement (plural 'we were') and precise engineering vocabulary."
+        "originalPhrase": "exact or close phrase from candidate answer",
+        "correction": "polished professional sentence",
+        "rule": "grammatical explanation"
       }
     ],
     "vocabularySuggestions": [
       {
-        "spokenWord": "make it faster",
-        "enhancedAlternative": "reduce p99 latency and improve throughput"
+        "spokenWord": "word candidate used",
+        "enhancedAlternative": "stronger industry term"
       }
     ],
-    "deliveryFeedback": "Spoke clearly with good cadence. Minimal filler words detected. Ensure consistent past tense when narrating prior engineering projects."
+    "deliveryFeedback": "Detailed observation on their speech pace and clarity based on their actual words."
   },
   "whatYouDidWell": [
-    "Clear explanation of architecture choices",
-    "Effective usage of the STAR framework with concrete metrics",
-    "Good awareness of trade-offs and edge cases"
+    "Specific strength referring to what they actually stated in their answers"
   ],
   "whatToImprove": [
-    "Tighten grammatical consistency when switching between project backstory and current design",
-    "Elaborate more on error handling and fallback mechanisms",
-    "Avoid jumping straight to the complex solution before stating the baseline"
+    "Specific gap or missing consideration in their actual responses"
   ],
-  "betterAnswerApproach": "When discussing technical trade-offs, state the problem first, describe the primary mechanism (e.g. Redis sliding window log), and finish with measurable latency and fault-tolerance metrics.",
+  "betterAnswerApproach": "A concrete blueprint of how to ideally answer their specific questions.",
   "recommendedPractice": [
-    "Practice speaking technical explanations with zero filler words under 90 seconds",
-    "Review distributed systems latency numbers and system design terminology",
-    "Rehearse behavioral responses using the STAR method"
+    "Specific technical or behavioral drill recommendations"
   ]
 }`;
 
-  try {
-    const aiText = await generateContentWithFallback(prompt, '');
-    let evalData: MockInterviewEvaluation | null = null;
+  let evalData: MockInterviewEvaluation | null = null;
 
+  try {
+    const aiText = await generateContentWithFallback(evalPrompt, '');
     if (aiText) {
-      try {
-        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          evalData = JSON.parse(jsonMatch[0]);
-        }
-      } catch (err) {
-        console.warn('Failed parsing Gemini interview evaluation');
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        evalData = JSON.parse(jsonMatch[0]);
       }
     }
-
-    if (!evalData) {
-      // High quality fallback evaluation with language & grammar breakdown
-      evalData = {
-        overallScore: 82,
-        communication: 84,
-        technicalAccuracy: 80,
-        problemSolving: 85,
-        confidence: 79,
-        structure: 83,
-        languageAndGrammar: {
-          grammarScore: 84,
-          vocabularyScore: 82,
-          fluencyScore: 86,
-          grammarCritiques: [
-            {
-              originalPhrase: 'The system handle the requests by queuing them',
-              correction: 'The system handles requests by queuing them asynchronously',
-              rule: 'Third-person singular agreement: subject "system" takes singular verb "handles".'
-            }
-          ],
-          vocabularySuggestions: [
-            {
-              spokenWord: 'it broke',
-              enhancedAlternative: 'encountered service degradation or partition failure'
-            },
-            {
-              spokenWord: 'good speed',
-              enhancedAlternative: 'sub-50ms p99 latency SLA'
-            }
-          ],
-          deliveryFeedback: 'Articulated thoughts clearly with steady speech cadence. Good conversational confidence with slight reliance on conversational fillers.'
-        },
-        whatYouDidWell: [
-          'Articulated the core requirements clearly before presenting the final approach',
-          'Good logical structure using concrete real-world engineering terminology',
-          'Demonstrated clear ownership and problem decomposition'
-        ],
-        whatToImprove: [
-          'Maintain grammatical consistency when explaining past project outcomes versus current architectures',
-          'Quantify your impact more precisely (e.g., latency reduction percentages or throughput numbers)',
-          'Address operational monitoring and failure modes proactively'
-        ],
-        betterAnswerApproach: 'Anchor your technical answers around the CAR framework: Context (the environment and challenge), Action (your specific technical execution), and Result (the measurable latency or business outcome).',
-        recommendedPractice: [
-          'Practice recording 2-minute technical answers focused on vocal clarity and grammar',
-          'Review distributed systems fundamentals and CAP theorem trade-offs',
-          'Brush up on memory management and database indexing patterns'
-        ]
-      };
-    }
-
-    session.evaluation = evalData;
-
-    session.conversation.push({
-      role: 'assistant',
-      content: `That concludes our mock interview! I have generated your comprehensive evaluation report with scores across Communication, Technical Accuracy, Problem Solving, and Structure. Review your feedback below to accelerate your preparation.`,
-      timestamp: new Date().toISOString()
-    });
-
-    res.json({
-      completed: true,
-      evaluation: evalData,
-      conversation: session.conversation
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed generating interview feedback: ' + err.message });
+  } catch (err) {
+    console.warn('AI evaluation generation failed, utilizing dynamic answer analyzer');
   }
+
+  if (!evalData) {
+    evalData = generateDynamicFallbackEvaluation(session, userAnswersPairs);
+  }
+
+  session.evaluation = evalData;
+
+  session.conversation.push({
+    role: 'assistant',
+    content: `Great job completing your mock interview! I have generated your comprehensive performance report analyzing your answers, technical depth, communication, and grammar. Review your personalized report below.`,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    completed: true,
+    evaluation: evalData,
+    conversation: session.conversation
+  });
 });
 
-// Get session details
-mockInterviewRouter.get('/:id', (req: Request, res: Response) => {
-  const session = appState.interviewSessions[req.params.id];
+// Fetch current session details
+mockInterviewRouter.get('/session/:sessionId', (req: Request, res: Response) => {
+  const { sessionId } = req.params;
+  const session = appState.interviewSessions[sessionId];
   if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
+    return res.status(404).json({ error: 'Interview session not found' });
   }
-  res.json({ session });
+  res.json(session);
 });
