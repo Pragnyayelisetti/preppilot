@@ -43,6 +43,57 @@ function parseOpportunityJson(raw: string): any | null {
   return null;
 }
 
+// Rule-based fallback classifier — runs whenever Gemini is unavailable or
+// returns something unparseable, so /sync never silently returns zero
+// opportunities just because GEMINI_API_KEY isn't set. It's deliberately
+// conservative: only classifies an email as an opportunity when the
+// subject/body actually contains career-related signal words, and always
+// marks itself with a lower confidence score than a real Gemini read.
+const OPPORTUNITY_KEYWORDS =
+  /intern(ship)?|hackathon|placement|shortlisted|selected|assessment|technical round|interview|scholarship|fellowship|hiring|job opening|applications? (are )?open|recruitment/i;
+const SPAM_KEYWORDS = /unsubscribe|newsletter|sale|% off|promo code|win a prize/i;
+
+function heuristicallyClassify(email: FetchedEmail): any | null {
+  const haystack = `${email.subject}\n${email.body}`;
+  if (!OPPORTUNITY_KEYWORDS.test(haystack) || SPAM_KEYWORDS.test(haystack)) {
+    return null;
+  }
+
+  const domainMatch = email.sender.match(/@([\w.-]+)/);
+  const domain = domainMatch ? domainMatch[1] : '';
+  const companyGuess =
+    domain.split('.').slice(0, -1).join(' ').replace(/[-_]/g, ' ').trim() ||
+    email.sender.split('@')[0];
+
+  let type: string = 'internship';
+  if (/hackathon/i.test(haystack)) type = 'hackathon';
+  else if (/scholarship/i.test(haystack)) type = 'scholarship';
+  else if (/fellowship/i.test(haystack)) type = 'fellowship';
+  else if (/\bjob\b|hiring|full[- ]time/i.test(haystack)) type = 'job';
+
+  const deadlineMatch = haystack.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  const inThreeWeeks = new Date();
+  inThreeWeeks.setDate(inThreeWeeks.getDate() + 21);
+
+  return {
+    isOpportunity: true,
+    company: companyGuess ? companyGuess.replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Unknown Organization',
+    title: email.subject,
+    type,
+    description: email.body.slice(0, 220) || 'Opportunity detected in your inbox via keyword scan.',
+    eligibility: 'Not specified — see original email for details.',
+    location: 'Not specified',
+    workMode: 'Remote',
+    deadline: deadlineMatch ? deadlineMatch[1] : inThreeWeeks.toISOString().split('T')[0],
+    applicationLink: '',
+    requiredSkills: [],
+    confidenceScore: 55,
+    confidenceLevel: 'moderate',
+    confidenceReasoning: ['Matched via keyword-based scan (AI extraction unavailable)'],
+    isSuspicious: false,
+  };
+}
+
 function toOpportunity(parsed: any, email: FetchedEmail, index: number): Opportunity {
   return {
     id: 'opp-live-' + Date.now() + '-' + index,
@@ -183,7 +234,13 @@ gmailRouter.post('/sync', async (req: Request, res: Response) => {
     for (let i = 0; i < emails.length; i++) {
       const email = emails[i];
       const raw = await generateContentWithFallback(EXTRACTION_PROMPT(email), '');
-      const parsed = parseOpportunityJson(raw);
+      let parsed = parseOpportunityJson(raw);
+      if (!parsed) {
+        // Gemini wasn't configured, errored, or returned something we
+        // couldn't parse — fall back to the keyword-based classifier
+        // instead of silently dropping this email.
+        parsed = heuristicallyClassify(email);
+      }
       if (parsed && parsed.isOpportunity) {
         found.push(toOpportunity(parsed, email, i));
       }

@@ -269,6 +269,13 @@ export function useProctoring({
       setIsFullscreen(fs);
       if (!fs) flag('fullscreen-exit');
     };
+    // Sync immediately when proctoring turns on. Full-screen is actually
+    // entered during the setup gate, before this effect (and its listener)
+    // attach — without this sync, the `isFullscreen` state captured at the
+    // hook's initial mount (still false, from before full-screen was ever
+    // requested) would stay stale and the UI would wrongly show the
+    // "return to full-screen" prompt right from the start of the interview.
+    setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handleFsChange);
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
   }, [active, flag]);

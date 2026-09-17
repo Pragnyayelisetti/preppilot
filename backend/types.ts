@@ -279,7 +279,7 @@ export interface WhatsAppNotification {
   waLink?: string;
   opportunityId?: string;
   eventId?: string;
-  status?: 'pending' | 'opened';
+  status?: 'pending' | 'opened' | 'sent' | 'failed';
 }
 
 export interface ScannedEmail {
