@@ -54,6 +54,24 @@ export const api = {
     return res.json();
   },
 
+  async forgotPassword(email: string) {
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    return res.json();
+  },
+
+  async resetPassword(data: { email: string; otp: string; newPassword: string }) {
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  },
+
   async logout() {
     const res = await fetch('/api/auth/logout', { method: 'POST' });
     return res.json();

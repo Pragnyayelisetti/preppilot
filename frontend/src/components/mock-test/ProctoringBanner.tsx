@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, ShieldAlert, UserX, Users, Volume2 } from 'lucide-react';
+import { AlertTriangle, Maximize, ShieldAlert, UserX, Users, Volume2 } from 'lucide-react';
 import type { ProctoringViolation } from '../../hooks/useProctoring';
 
 interface ProctoringBannerProps {
@@ -10,6 +10,12 @@ interface ProctoringBannerProps {
   isFaceVisible?: boolean;
   faceCount?: number;
   audioLevel?: number;
+  /** Whether the browser tab is currently in full-screen mode. */
+  isFullscreen?: boolean;
+  /** Re-requests full-screen. Must be called from a real click — browsers
+   * block requestFullscreen() outside a direct user gesture, which is why
+   * this can't happen automatically the moment full-screen is exited. */
+  onReenterFullscreen?: () => void | Promise<void>;
 }
 
 /**
@@ -24,6 +30,8 @@ export const ProctoringBanner: React.FC<ProctoringBannerProps> = ({
   isFaceVisible = true,
   faceCount = 1,
   audioLevel = 0,
+  isFullscreen = true,
+  onReenterFullscreen,
 }) => {
   const [showToast, setShowToast] = useState(false);
 
@@ -36,6 +44,40 @@ export const ProctoringBanner: React.FC<ProctoringBannerProps> = ({
 
   return (
     <>
+      {/* Full-Screen Exit Prompt: pressing Escape, switching tabs/apps, or
+          minimizing always drops the browser out of full-screen. That exit
+          is already counted as a violation by the hook — browsers will NOT
+          let us silently re-enter full-screen for the person, so this is
+          the required "click to return" affordance that was missing. */}
+      {!isFullscreen && (
+        <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-sm w-full bg-white rounded-2xl shadow-2xl p-6 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Maximize className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">You've left full-screen mode</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                This has been logged as a proctoring strike. The interview is still running in the
+                background — click below to return to full-screen and continue.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onReenterFullscreen?.()}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <Maximize className="w-3.5 h-3.5" />
+              <span>Return to Full-Screen</span>
+            </button>
+            <div className="text-[11px] font-semibold text-rose-600">
+              {Math.max(0, maxViolations - violationCount)} strike(s) remaining before the interview
+              ends automatically.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Proctoring Status Badge */}
       <div className="fixed top-4 right-4 z-50 flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-white/95 backdrop-blur-md border border-slate-200 shadow-md">
         <ShieldAlert className={`w-4 h-4 ${violationCount > 0 ? 'text-rose-600 animate-pulse' : 'text-emerald-600'}`} />

@@ -95,78 +95,135 @@ function getFallbackQuestion(track: string, topic?: string, index: number = 0): 
   return pool[randIndex];
 }
 
-// Helper to generate dynamic evaluation fallback when Gemini is unavailable
+const UNANSWERED_PLACEHOLDER = '(No answer provided — time expired)';
+
+/** Treats an answer as "not really answered" — used consistently by both the
+ * AI prompt and this local fallback so a blank/timed-out question never gets
+ * credited with fabricated strengths or invented grammar quotes. */
+function isEffectivelyUnanswered(answer: string): boolean {
+  return !answer || answer.trim() === UNANSWERED_PLACEHOLDER || answer.trim().split(/\s+/).filter(Boolean).length < 3;
+}
+
+// Common filler/vague terms worth flagging IF the candidate actually used
+// them — never invented wholesale.
+const VAGUE_TERM_UPGRADES: Record<string, string> = {
+  'made it work': 'implemented and validated a working solution',
+  'handled the data': 'ingested, validated, and processed the data',
+  'did the thing': 'implemented the required functionality',
+  'stuff': 'components',
+  'things': 'considerations',
+  'a lot of': 'a significant volume of',
+  'kind of': 'primarily',
+  'sort of': 'primarily'
+};
+
+// Helper to generate a report when Gemini is unavailable or returned a
+// malformed response. This must NEVER invent quotes, phrases, or claims the
+// candidate didn't actually provide — everything here is derived only from
+// the real answers/metrics passed in.
 function generateDynamicFallbackEvaluation(
   session: MockInterviewSession,
   userResponses: { question: string; answer: string; metrics?: InterviewAnswerMetrics }[]
 ): MockInterviewEvaluation {
-  const totalAnswers = userResponses.length;
-  const allAnswersText = userResponses.map(r => r.answer).join(' ');
-  const wordCount = allAnswersText.split(/\s+/).filter(Boolean).length;
-  const avgWordsPerAnswer = totalAnswers > 0 ? Math.round(wordCount / totalAnswers) : 0;
+  const totalQuestions = userResponses.length;
+  const answered = userResponses.filter(r => !isEffectivelyUnanswered(r.answer));
+  const unanswered = userResponses.filter(r => isEffectivelyUnanswered(r.answer));
+  const unansweredCount = unanswered.length;
+
+  const answeredText = answered.map(r => r.answer).join(' ');
+  const answeredWordCount = answeredText.split(/\s+/).filter(Boolean).length;
+  const avgWordsPerAnswer = answered.length > 0 ? Math.round(answeredWordCount / answered.length) : 0;
 
   const totalFillerWords = userResponses.reduce(
     (acc, curr) => acc + (curr.metrics?.fillerWordCount || 0),
     0
   );
 
-  // Score adjustments based on answer length and substance
-  let scoreBase = 78;
+  const primaryTopic = session.topic || session.track || 'Engineering';
+
+  // Score honestly reflects how many questions actually got a real answer —
+  // a mostly-unanswered session must score low, never a "moderate default".
+  const answeredRatio = totalQuestions > 0 ? answered.length / totalQuestions : 0;
+  let scoreBase = Math.round(35 + answeredRatio * 45); // 35 (0 answered) .. 80 (all answered)
   if (avgWordsPerAnswer > 60) scoreBase += 6;
   if (avgWordsPerAnswer > 110) scoreBase += 4;
   if (totalFillerWords > 6) scoreBase -= 4;
+  scoreBase = Math.min(94, Math.max(20, scoreBase));
 
-  const primaryTopic = session.topic || session.track || 'Engineering';
+  // Only ever quote a phrase that was actually said, from a real answer.
+  const firstRealAnswer = answered[0]?.answer || '';
+  const firstWords = firstRealAnswer.split(/\s+/).slice(0, 10).join(' ');
 
-  // Sample extract from candidate answers for personalized feedback
-  const firstAns = userResponses[0]?.answer || '';
-  const firstWords = firstAns.split(' ').slice(0, 8).join(' ');
+  const grammarCritiques = firstWords
+    ? [
+        {
+          originalPhrase: firstWords,
+          correction: 'Consider restructuring with a clear Situation → Action → Result flow and active voice.',
+          rule: 'Structured, active-voice phrasing reads as more confident and easier to follow in a live interview.'
+        }
+      ]
+    : [];
+
+  const vocabularySuggestions = answered
+    .flatMap(r => {
+      const lower = r.answer.toLowerCase();
+      return Object.entries(VAGUE_TERM_UPGRADES)
+        .filter(([term]) => lower.includes(term))
+        .map(([term, upgrade]) => ({ spokenWord: term, enhancedAlternative: upgrade }));
+    })
+    // de-duplicate by spokenWord
+    .filter((v, i, arr) => arr.findIndex(x => x.spokenWord === v.spokenWord) === i)
+    .slice(0, 4);
+
+  const deliveryFeedback =
+    answered.length === 0
+      ? 'No spoken content was captured for this session, so vocal delivery could not be analyzed.'
+      : `Your response length averaged ~${avgWordsPerAnswer} words per answered question. ${
+          totalFillerWords > 0
+            ? `Detected approximately ${totalFillerWords} conversational filler word(s). Pausing before speaking will help project authority.`
+            : 'Clean articulation with minimal filler words detected.'
+        }`;
+
+  const whatYouDidWell: string[] =
+    answered.length === 0
+      ? []
+      : [
+          `Provided a substantive response to ${answered.length} of ${totalQuestions} question(s) on ${primaryTopic}`,
+          ...(totalFillerWords <= 4 ? ['Kept filler words to a minimum, which reads as more confident and prepared'] : [])
+        ];
+
+  const whatToImprove: string[] = [
+    ...unanswered.map(
+      (r) => `No answer was given for "${r.question}" — this was scored as unanswered rather than skipped silently`
+    ),
+    ...(answered.length > 0
+      ? [
+          'Structure answers using the STAR format (Situation, Task, Action, Result) to provide measurable outcomes',
+          'Call out edge cases, failure handling, and trade-offs explicitly rather than only describing the happy path'
+        ]
+      : ['Attempt every question, even partially — an incomplete answer scores far better than no answer at all'])
+  ];
 
   return {
-    overallScore: Math.min(94, Math.max(68, scoreBase)),
-    communication: Math.min(92, Math.max(70, scoreBase - (totalFillerWords > 5 ? 5 : 0))),
-    technicalAccuracy: Math.min(95, Math.max(70, scoreBase + 2)),
-    problemSolving: Math.min(93, Math.max(70, scoreBase)),
-    confidence: Math.min(90, Math.max(68, scoreBase - (totalFillerWords > 4 ? 3 : 0))),
-    structure: Math.min(92, Math.max(72, scoreBase + 1)),
+    overallScore: scoreBase,
+    communication: Math.max(15, scoreBase - (totalFillerWords > 5 ? 5 : 0)),
+    technicalAccuracy: Math.max(15, answered.length > 0 ? scoreBase + 2 : 20),
+    problemSolving: Math.max(15, scoreBase),
+    confidence: Math.max(15, scoreBase - (totalFillerWords > 4 ? 3 : 0)),
+    structure: Math.max(15, scoreBase + 1),
     languageAndGrammar: {
-      grammarScore: Math.min(92, Math.max(74, scoreBase)),
-      vocabularyScore: Math.min(90, Math.max(72, scoreBase - 1)),
-      fluencyScore: Math.min(94, Math.max(70, scoreBase + 1)),
-      grammarCritiques: [
-        {
-          originalPhrase: firstWords ? `"${firstWords}..."` : 'Informal phrasing in explanation',
-          correction: 'Use structured active phrasing: "In my previous project, I implemented..."',
-          rule: 'Maintain consistent past tense when describing previous implementations, and active voice for engineering decisions.'
-        }
-      ],
-      vocabularySuggestions: [
-        {
-          spokenWord: 'it handled the data',
-          enhancedAlternative: 'ingested, sanitized, and batched data processing pipelines'
-        },
-        {
-          spokenWord: 'made it work',
-          enhancedAlternative: 'architected and deployed a resilient solution'
-        }
-      ],
-      deliveryFeedback: `Your response length averaged ~${avgWordsPerAnswer} words per response. ${
-        totalFillerWords > 0
-          ? `Detected approximately ${totalFillerWords} conversational filler word(s). Pausing before speaking will help project authority.`
-          : 'Clean articulation with minimal vocal pauses detected.'
-      }`
+      grammarScore: Math.max(15, scoreBase),
+      vocabularyScore: Math.max(15, scoreBase - 1),
+      fluencyScore: Math.max(15, scoreBase + 1),
+      grammarCritiques,
+      vocabularySuggestions,
+      deliveryFeedback
     },
-    whatYouDidWell: [
-      `Engaged with the ${primaryTopic} interview questions directly and addressed the core problem parameters`,
-      `Maintained a clear progression from context to implementation across answers`,
-      `Demonstrated familiarity with key engineering workflows and concepts`
-    ],
-    whatToImprove: [
-      `Structure answers using the STAR format (Situation, Task, Action, Result) to provide measurable outcomes`,
-      `Highlight edge case prevention, error boundaries, and monitoring metrics more prominently`,
-      `Elaborate on architectural alternatives considered before choosing your final approach`
-    ],
-    betterAnswerApproach: `For ${primaryTopic} interviews, start by clarifying assumptions, outline your high-level strategy, dive into the implementation trade-offs, and conclude with concrete operational metrics (e.g. latency, reliability, team velocity).`,
+    whatYouDidWell,
+    whatToImprove,
+    betterAnswerApproach: `For ${primaryTopic} interviews, start by clarifying assumptions, outline your high-level strategy, dive into the implementation trade-offs, and conclude with concrete operational metrics (e.g. latency, reliability, team velocity).${
+      unansweredCount > 0 ? ' Most importantly, give every question at least a partial attempt before time runs out.' : ''
+    }`,
     recommendedPractice: [
       `Practice 2-minute timed voice drills for ${primaryTopic} topics`,
       `Study system design failure recovery and API rate limiting mechanisms`,
@@ -285,7 +342,7 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
 
   const answerText = typeof answer === 'string' && answer.trim()
     ? answer.trim()
-    : '(No answer provided — time expired)';
+    : UNANSWERED_PLACEHOLDER;
 
   // Record candidate's answer
   session.conversation.push({
@@ -363,11 +420,14 @@ mockInterviewRouter.post('/respond', async (req: Request, res: Response) => {
       const metricsInfo = m
         ? ` (Time: ${m.timeTakenSeconds}s, Fillers: ${m.fillerWordCount}, ${m.answeredViaVoice ? 'Voice' : 'Typed'})`
         : '';
+      const unanswered = isEffectivelyUnanswered(pair.answer);
       return `Q${idx + 1}: ${pair.question}
-Candidate's Spoken Answer${metricsInfo}:
+Candidate's Spoken Answer${metricsInfo}${unanswered ? ' [UNANSWERED / NO SUBSTANTIVE CONTENT]' : ''}:
 "${pair.answer}"`;
     })
     .join('\n\n');
+
+  const unansweredCount = userAnswersPairs.filter(p => isEffectivelyUnanswered(p.answer)).length;
 
   const evalPrompt = `You are a Senior Engineering Hiring Manager and Technical Communication Coach evaluating a student's live mock interview responses.
 
@@ -378,14 +438,19 @@ ${session.company ? `Target Company: ${session.company}` : ''}
 CANDIDATE'S ACTUAL QUESTIONS AND ANSWERS:
 ${promptUserSummary}
 
-CRITICAL MANDATORY INSTRUCTIONS:
-1. Your report MUST be directly and accurately based on the candidate's actual answers shown above.
-2. Under "whatYouDidWell", cite specific points, algorithms, or examples the candidate actually mentioned in their answers.
-3. Under "whatToImprove", point out exact technical inaccuracies, omitted edge cases, or weak explanations present in their answers.
-4. Under "languageAndGrammar", analyze their actual grammar, vocabulary, and phrasing:
-   - Provide "grammarCritiques" identifying an actual imperfect phrase they used -> improved professional version -> rule.
-   - Provide "vocabularySuggestions" taking words they used -> higher-level engineering terms.
-5. Score them fairly (0-100) based on their real performance.
+CRITICAL MANDATORY INSTRUCTIONS — DO NOT FABRICATE ANYTHING:
+1. Your report MUST be directly and accurately based ONLY on the candidate's actual answers shown above. Never invent, assume, or paraphrase-as-fact anything the candidate did not actually say.
+2. Any answer marked "[UNANSWERED / NO SUBSTANTIVE CONTENT]" MUST be treated as not answered:
+   - Do NOT praise it, do NOT invent technical content for it, and do NOT include it in "grammarCritiques" or "vocabularySuggestions".
+   - Reflect it plainly in "whatToImprove" (e.g. "No answer was given for Q<n> within the time limit") and factor it into a LOWER score for that dimension.
+   - This session has ${unansweredCount} unanswered question(s) out of ${userAnswersPairs.length}.
+3. Under "whatYouDidWell", cite specific points, algorithms, or examples the candidate actually mentioned in their real (answered) responses only. If no question was substantively answered, say so honestly instead of inventing strengths.
+4. Under "whatToImprove", point out exact technical inaccuracies, omitted edge cases, or weak explanations present in their real answers — plus any unanswered questions per rule 2.
+5. Under "languageAndGrammar", analyze ONLY their actual grammar, vocabulary, and phrasing from real answers:
+   - Provide "grammarCritiques" identifying an actual imperfect phrase they used -> improved professional version -> rule. Only use phrases that literally appear in an answered response above.
+   - Provide "vocabularySuggestions" taking words they actually used -> higher-level engineering terms.
+   - If there isn't enough real spoken content to critique, say so plainly rather than fabricating an example.
+6. Score them fairly (0-100) based on their real performance — a session with mostly unanswered questions must score low, not moderate.
 
 Output ONLY valid JSON matching this schema:
 {
@@ -433,7 +498,22 @@ Output ONLY valid JSON matching this schema:
     if (aiText) {
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        evalData = JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(jsonMatch[0]);
+        // Sanity-check the shape before trusting it — an incomplete or
+        // malformed AI response should fall back to the honest,
+        // answer-derived analyzer rather than render a broken/blank report.
+        const isValidShape =
+          parsed &&
+          typeof parsed.overallScore === 'number' &&
+          Array.isArray(parsed.whatYouDidWell) &&
+          Array.isArray(parsed.whatToImprove) &&
+          parsed.languageAndGrammar &&
+          typeof parsed.languageAndGrammar === 'object';
+        if (isValidShape) {
+          evalData = parsed;
+        } else {
+          console.warn('AI evaluation response had an unexpected shape, utilizing dynamic answer analyzer');
+        }
       }
     }
   } catch (err) {

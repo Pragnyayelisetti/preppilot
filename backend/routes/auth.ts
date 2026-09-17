@@ -11,15 +11,17 @@ export const authRouter = Router();
 // In-memory fallback accounts for when MongoDB is not connected
 const inMemoryUsers = new Map<string, any>();
 
-// Seed default user account
+// Seed default user account — uses a clearly-fake demo email/phone so a
+// real person's inbox/number never gets pulled into demos, screen
+// recordings, or a Google OAuth account-chooser cache.
 (async () => {
   const defaultHash = await bcrypt.hash('password123', 10);
-  inMemoryUsers.set('pragnyayelisetti@gmail.com', {
+  inMemoryUsers.set('demo.student@preppilot.app', {
     _id: 'usr_demo_101',
-    username: 'Pragnya Yelisetti',
-    email: 'pragnyayelisetti@gmail.com',
+    username: 'Demo Student',
+    email: 'demo.student@preppilot.app',
     passwordHash: defaultHash,
-    phoneNumber: '+1 (555) 349-2819',
+    phoneNumber: '+1 (555) 010-0100',
     college: 'International Institute of Information Technology',
     degree: 'B.Tech',
     branch: 'Computer Science & Engineering',
@@ -30,7 +32,7 @@ const inMemoryUsers = new Map<string, any>();
     careerGoals: 'Secure a top-tier software engineering internship at Google, Amazon, or high-growth tech firms.',
     isOnboarded: true,
     isGmailConnected: false,
-    whatsappNumber: '+1 (555) 349-2819',
+    whatsappNumber: '+1 (555) 010-0100',
     whatsappNotificationsEnabled: true,
     notificationPreferences: {
       deadlines: true,
@@ -281,6 +283,91 @@ authRouter.post('/resend-otp', async (req: Request, res: Response) => {
       : `New 6-digit verification code sent to ${cleanEmail}`,
     deliveryMethod: emailResult.method,
     debugOtp: otp,
+  });
+});
+
+// Forgot Password — sends a 6-digit OTP to the registered email. Reuses
+// the same otpStore as login/signup, but is a DIFFERENT flow: verifying
+// this OTP (via /verify-reset-otp) never logs the person in — it only
+// unlocks setting a new password via /reset-password.
+authRouter.post('/forgot-password', async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) {
+    return fail(res, 400, 'Email is required');
+  }
+  const cleanEmail = email.toLowerCase().trim();
+
+  const userDoc = await findUserByEmail(cleanEmail);
+  if (!userDoc) {
+    // Same message whether or not the account exists, so this endpoint
+    // can't be used to discover which emails are registered.
+    return res.json({
+      success: true,
+      message: `If an account exists for ${cleanEmail}, a password reset code has been sent.`,
+    });
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  appState.otpStore[cleanEmail] = otp;
+
+  const emailResult = await sendOtpEmail(cleanEmail, otp, userDoc.username);
+
+  res.json({
+    success: true,
+    message: emailResult.method === 'console-logger'
+      ? `Password reset code: ${otp} (Demo Preview Mode)`
+      : `Password reset code sent to ${cleanEmail}`,
+    email: cleanEmail,
+    deliveryMethod: emailResult.method,
+    debugOtp: otp,
+  });
+});
+
+// Reset Password — verifies the OTP from /forgot-password and, if valid,
+// sets the new password. Does NOT log the user in; they still use the
+// normal login flow afterwards.
+authRouter.post('/reset-password', async (req: Request, res: Response) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword) {
+    return fail(res, 400, 'Email, verification code and new password are required');
+  }
+  if (String(newPassword).length < 6) {
+    return fail(res, 400, 'New password must be at least 6 characters long');
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+  const expectedOtp = appState.otpStore[cleanEmail];
+
+  if (!expectedOtp || otp !== expectedOtp) {
+    return fail(res, 400, 'Invalid or expired code. Please request a new one.');
+  }
+
+  const userDoc = await findUserByEmail(cleanEmail);
+  if (!userDoc) {
+    return fail(res, 404, 'Account not found.');
+  }
+
+  delete appState.otpStore[cleanEmail];
+  const newHash = await bcrypt.hash(newPassword, 10);
+
+  if (mongoose.connection.readyState === 1 && userDoc._id) {
+    try {
+      await UserModel.updateOne({ email: cleanEmail }, { passwordHash: newHash });
+    } catch {
+      // fall through to in-memory update below
+    }
+  }
+  // Keep the in-memory map in sync too, since findUserByEmail() falls
+  // back to it whenever MongoDB isn't connected.
+  const inMemoryEntry = inMemoryUsers.get(cleanEmail);
+  if (inMemoryEntry) {
+    inMemoryEntry.passwordHash = newHash;
+    inMemoryUsers.set(cleanEmail, inMemoryEntry);
+  }
+
+  res.json({
+    success: true,
+    message: 'Password reset successfully. Please log in with your new password.',
   });
 });
 

@@ -80,14 +80,25 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
   const setupVideoRef = useRef<HTMLVideoElement | null>(null);
   const candidateVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  useEffect(() => {
-    if (setupVideoRef.current && mediaStream) {
-      setupVideoRef.current.srcObject = mediaStream;
+  // Callback refs (instead of a useEffect keyed only on `mediaStream`) so the
+  // live stream gets attached whenever either <video> element actually
+  // mounts — including the candidate video element, which only mounts once
+  // the session starts (a render *after* mediaStream was first set). A plain
+  // useEffect on [mediaStream] ran once while that element didn't exist yet
+  // and never re-attached the stream once it did, which is why the
+  // candidate's face never appeared on the right-hand panel.
+  const attachSetupVideo = (el: HTMLVideoElement | null) => {
+    setupVideoRef.current = el;
+    if (el && mediaStream) {
+      el.srcObject = mediaStream;
     }
-    if (candidateVideoRef.current && mediaStream) {
-      candidateVideoRef.current.srcObject = mediaStream;
+  };
+  const attachCandidateVideo = (el: HTMLVideoElement | null) => {
+    candidateVideoRef.current = el;
+    if (el && mediaStream) {
+      el.srcObject = mediaStream;
     }
-  }, [mediaStream]);
+  };
 
   // ---- session state ----
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -132,6 +143,8 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
     isFaceVisible,
     faceCount,
     audioLevel,
+    isFullscreen,
+    reenterFullscreen,
   } = useProctoring({
     stream: mediaStream,
     videoRef: candidateVideoRef,
@@ -156,9 +169,18 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
     setIsTestFullscreen(false);
   };
 
+  // Always call the LATEST teardownMedia on unmount. A plain
+  // `useEffect(() => () => teardownMedia(), [])` would close over the
+  // very first render's `teardownMedia` (created when mediaStream was
+  // still null), so clicking "End Call" mid-interview never actually
+  // stopped the camera/mic — the stale closure had nothing to stop.
+  // Keeping the latest version in a ref and calling that instead fixes it.
+  const teardownMediaRef = useRef(teardownMedia);
+  teardownMediaRef.current = teardownMedia;
+
   useEffect(() => {
     return () => {
-      teardownMedia();
+      teardownMediaRef.current();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -776,7 +798,7 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
 
           {mediaStream && (
             <div className="flex items-center gap-3 p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
-              <video ref={setupVideoRef} autoPlay muted className="w-20 h-14 rounded-xl object-cover bg-black" />
+              <video ref={attachSetupVideo} autoPlay muted className="w-20 h-14 rounded-xl object-cover bg-black" />
               <span className="text-xs font-semibold text-emerald-800">Camera & mic feed verified</span>
             </div>
           )}
@@ -816,6 +838,8 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
         isFaceVisible={isFaceVisible}
         faceCount={faceCount}
         audioLevel={audioLevel}
+        isFullscreen={isFullscreen}
+        onReenterFullscreen={reenterFullscreen}
       />
 
       {/* Video Call Top Bar */}
@@ -851,7 +875,10 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
           </button>
 
           <button
-            onClick={onExit}
+            onClick={() => {
+              teardownMedia();
+              onExit();
+            }}
             className="px-3 py-1 text-xs bg-rose-600/80 hover:bg-rose-600 text-white font-semibold rounded-lg transition-colors flex items-center gap-1.5"
           >
             <PhoneOff className="w-3 h-3" />
@@ -938,7 +965,7 @@ export const MockInterviewSimulator: React.FC<MockInterviewSimulatorProps> = ({
         <div className="bg-black rounded-3xl border border-slate-800 relative overflow-hidden min-h-[380px] shadow-lg flex flex-col justify-between">
           {/* Live Webcam Stream */}
           <video
-            ref={candidateVideoRef}
+            ref={attachCandidateVideo}
             autoPlay
             muted
             playsInline

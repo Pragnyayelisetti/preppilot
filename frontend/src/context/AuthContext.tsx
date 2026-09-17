@@ -14,6 +14,8 @@ interface AuthContextType {
   login: (email: string, password?: string, username?: string, phoneNumber?: string) => Promise<{ success: boolean; requiresOtp?: boolean; message: string; debugOtp?: string }>;
   verifyOtp: (email: string, otp: string) => Promise<{ success: boolean; message: string }>;
   resendOtp: (email: string) => Promise<{ success: boolean; message: string; debugOtp?: string }>;
+  forgotPassword: (email: string) => Promise<{ success: boolean; message: string; debugOtp?: string }>;
+  resetPassword: (email: string, otp: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<void>;
   connectGmail: (email?: string) => Promise<void>;
   disconnectGmail: () => Promise<void>;
@@ -37,7 +39,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await api.getMe();
       if (data?.user) {
         setUser(data.user);
-        localStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
+        sessionStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
       }
       const gStatus = await api.getGmailStatus();
       if (gStatus) {
@@ -48,28 +50,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Restore authenticated session across reloads and Google OAuth redirects
+  // Restore authenticated session on REFRESH only — never on a brand-new tab.
+  //
+  // sessionStorage (not localStorage) is the key here: it survives a page
+  // reload but is wiped the moment the tab is closed, and a newly opened
+  // tab always starts with an empty sessionStorage of its own. That alone
+  // gives the exact behaviour asked for: refresh keeps you logged in,
+  // closing the tab and reopening does not.
+  //
+  // The other half of the fix is NOT calling api.getMe() unconditionally.
+  // This backend keeps one shared "current user" in server memory rather
+  // than a real per-browser session, so a blind getMe() call would log a
+  // brand-new tab in anyway just because *some* browser, at some point,
+  // had verified an OTP. Gating on sessionStorage first is what makes a
+  // fresh tab actually show the login screen.
   useEffect(() => {
     const initSession = async () => {
-      const saved = localStorage.getItem('preppilot_active_user');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          setUser(parsed);
-        } catch {
-          // ignore parsing errors
-        }
+      const saved = sessionStorage.getItem('preppilot_active_user');
+
+      if (!saved) {
+        // No session recorded for THIS tab — show the login screen and
+        // stop here. Do not call getMe(): a genuinely new tab must not
+        // be able to inherit whatever session happens to be live on the
+        // backend from a previous login elsewhere.
+        setIsLoading(false);
+        return;
       }
 
-      // Check if redirected from Google OAuth
-      const urlParams = new URLSearchParams(window.location.search);
-      const isFromGoogle = urlParams.has('gmail_connected') || urlParams.has('gmail_error');
+      try {
+        const parsed = JSON.parse(saved);
+        setUser(parsed);
+      } catch {
+        sessionStorage.removeItem('preppilot_active_user');
+        setIsLoading(false);
+        return;
+      }
 
+      // We DO have a session for this tab (e.g. a refresh, or returning
+      // from the Google OAuth redirect) — refresh it from the server so
+      // any changes (Gmail connect status etc.) are picked up.
       try {
         const data = await api.getMe();
         if (data?.user) {
           setUser(data.user);
-          localStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
+          sessionStorage.setItem('preppilot_active_user', JSON.stringify(data.user));
         }
         const gStatus = await api.getGmailStatus();
         if (gStatus) {
@@ -111,11 +135,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.verifyOtp({ email, otp });
     if (res.success && res.user) {
       setUser(res.user);
-      localStorage.setItem('preppilot_active_user', JSON.stringify(res.user));
+      sessionStorage.setItem('preppilot_active_user', JSON.stringify(res.user));
       setPendingEmailForOtp(null);
       setLatestDebugOtp(null);
     }
     return res;
+  };
+
+  const forgotPassword = async (email: string) => {
+    return api.forgotPassword(email);
+  };
+
+  const resetPassword = async (email: string, otp: string, newPassword: string) => {
+    return api.resetPassword({ email, otp, newPassword });
   };
 
   const resendOtp = async (email: string) => {
@@ -130,7 +162,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await api.updateProfile(updates);
     if (res.success && res.profile) {
       setUser(res.profile);
-      localStorage.setItem('preppilot_active_user', JSON.stringify(res.profile));
+      sessionStorage.setItem('preppilot_active_user', JSON.stringify(res.profile));
     }
   };
 
@@ -164,7 +196,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     api.logout().catch(() => {});
-    localStorage.removeItem('preppilot_active_user');
+    sessionStorage.removeItem('preppilot_active_user');
     setUser(null);
     setPendingEmailForOtp(null);
   };
@@ -183,6 +215,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         verifyOtp,
         resendOtp,
+        forgotPassword,
+        resetPassword,
         updateProfile,
         connectGmail,
         disconnectGmail,

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { OtpVerification } from './OtpVerification';
+import { ForgotPassword } from './ForgotPassword';
 import { Sparkles, ArrowRight, ShieldCheck, Mail, Lock, User, Phone } from 'lucide-react';
 
 interface AuthModalProps {
@@ -10,6 +11,7 @@ interface AuthModalProps {
 export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const { signup, login, verifyOtp, resendOtp, pendingEmailForOtp, setPendingEmailForOtp } = useAuth();
   const [tab, setTab] = useState<'signup' | 'login'>('login');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -59,6 +61,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
       setLoading(false);
     }
   };
+
+  // Forgot password flow takes over the whole modal
+  if (showForgotPassword) {
+    return (
+      <div className="py-8 animate-fade-in">
+        <ForgotPassword onBackToLogin={() => setShowForgotPassword(false)} />
+      </div>
+    );
+  }
 
   // If waiting for OTP verification
   if (pendingEmailForOtp) {
@@ -211,6 +222,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
               className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white text-slate-900 placeholder:text-slate-400"
             />
           </div>
+          {tab === 'login' && (
+            <button
+              type="button"
+              onClick={() => setShowForgotPassword(true)}
+              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 mt-1.5"
+            >
+              Forgot password?
+            </button>
+          )}
         </div>
 
         {/* Submit Button */}

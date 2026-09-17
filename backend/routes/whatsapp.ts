@@ -3,6 +3,7 @@ import { appState } from '../state';
 import { WhatsAppNotification, WhatsAppNotificationPreferences, DeadlineReminderTiming } from '../types';
 import { UserModel } from '../models/User';
 import mongoose from 'mongoose';
+import { sendWhatsAppMessage } from '../services/whatsappService';
 
 export const whatsappRouter = Router();
 
@@ -183,9 +184,30 @@ function generateDueReminders(): WhatsAppNotification[] {
   // Prepend newly generated reminders into session notifications
   if (newDueReminders.length > 0) {
     appState.notifications = [...newDueReminders, ...appState.notifications];
+
+    // Auto-dispatch each new reminder via Twilio (if configured) — fire
+    // and forget, so this stays a fast sync function; each notification's
+    // status is updated in place once the send resolves.
+    for (const notif of newDueReminders) {
+      dispatchWhatsAppNotification(notif, cleanPhone);
+    }
   }
 
   return newDueReminders;
+}
+
+// Actually sends a notification via Twilio WhatsApp if TWILIO_* env vars
+// are configured; otherwise leaves it as 'pending' so the UI's wa.me
+// click-to-chat link remains the fallback.
+async function dispatchWhatsAppNotification(notif: WhatsAppNotification, cleanPhone: string) {
+  const result = await sendWhatsAppMessage(cleanPhone, notif.message);
+  if (result.method === 'twilio' && result.success) {
+    notif.status = 'sent';
+  } else if (result.method === 'twilio' && !result.success) {
+    notif.status = 'failed';
+    console.warn(`[WhatsApp] Auto-send failed for notification ${notif.id}: ${result.error}`);
+  }
+  // method === 'not-configured' → leave status as 'pending' (wa.me link fallback)
 }
 
 // GET WhatsApp status & settings
@@ -355,12 +377,14 @@ whatsappRouter.post('/preferences', (req: Request, res: Response) => {
   });
 });
 
-// Trigger click-to-chat reminder (generates wa.me link instead of auto-sending)
-whatsappRouter.post('/send', (req: Request, res: Response) => {
+// Sends a reminder — actually dispatches it automatically via Twilio if
+// TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM are set;
+// otherwise falls back to the wa.me click-to-chat link (manual send).
+whatsappRouter.post('/send', async (req: Request, res: Response) => {
   const { title, message, type = 'deadline', company, role, deadline, daysRemaining } = req.body;
   const phone = appState.user.whatsappPreferences?.phoneNumber || appState.user.whatsappNumber || '';
   const cleanPhone = getCleanPhoneNumber(phone);
-  const userFirstName = (appState.user.name || 'Pragnya').trim().split(' ')[0] || 'there';
+  const userFirstName = (appState.user.name || 'there').trim().split(' ')[0] || 'there';
 
   const messageText = message || `Hi ${userFirstName} 👋\n\n⏰ Your application deadline is approaching!\n\nCompany: ${company || 'Microsoft'}\nRole: ${role || 'Software Engineer Intern'}\nDeadline: ${deadline || 'September 15'}\n\nYou have ${daysRemaining || 3} days left to apply. 🚀`;
 
@@ -379,10 +403,36 @@ whatsappRouter.post('/send', (req: Request, res: Response) => {
 
   appState.notifications.unshift(newNotif);
 
+  const sendResult = await sendWhatsAppMessage(cleanPhone, messageText);
+
+  if (sendResult.method === 'twilio' && sendResult.success) {
+    newNotif.status = 'sent';
+    return res.json({
+      success: true,
+      message: 'WhatsApp message sent automatically via Twilio ✓',
+      notification: newNotif,
+      waLink,
+      autoSent: true,
+    });
+  }
+
+  if (sendResult.method === 'twilio' && !sendResult.success) {
+    newNotif.status = 'failed';
+    return res.json({
+      success: true,
+      message: `Automatic send failed (${sendResult.error}) — use the click-to-chat link instead.`,
+      notification: newNotif,
+      waLink,
+      autoSent: false,
+    });
+  }
+
+  // Twilio not configured — same click-to-chat fallback as before.
   res.json({
     success: true,
-    message: `WhatsApp reminder prepared with click-to-chat link!`,
+    message: 'WhatsApp reminder prepared with click-to-chat link! (Set up Twilio to send automatically — see backend/services/whatsappService.ts)',
     notification: newNotif,
     waLink,
+    autoSent: false,
   });
 });

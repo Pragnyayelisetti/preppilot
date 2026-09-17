@@ -25,10 +25,10 @@ export interface AppState {
 export const appState: AppState = {
   user: {
     id: 'usr_demo_101',
-    name: 'Pragnya Yelisetti',
-    username: 'pragnyayelisetti',
-    email: 'pragnyayelisetti@gmail.com',
-    phoneNumber: '+1 (555) 349-2819',
+    name: 'Demo Student',
+    username: 'demo.student',
+    email: 'demo.student@preppilot.app',
+    phoneNumber: '+1 (555) 010-0100',
     college: 'International Institute of Information Technology',
     degree: 'B.Tech',
     branch: 'Computer Science & Engineering',
@@ -41,11 +41,11 @@ export const appState: AppState = {
     isOnboarded: true,
     isGmailConnected: false,
     connectedGmailAddress: undefined,
-    whatsappNumber: '+1 (555) 349-2819',
+    whatsappNumber: '+1 (555) 010-0100',
     whatsappNotificationsEnabled: true,
     whatsappPreferences: {
       enabled: true,
-      phoneNumber: '+1 (555) 349-2819',
+      phoneNumber: '+1 (555) 010-0100',
       frequency: 'daily',
       deadlineTimings: ['7_days', '3_days', '1_day', 'on_deadline_day'],
       notifyNewOpportunities: true,
@@ -59,9 +59,7 @@ export const appState: AppState = {
       mockTestReminders: true
     }
   },
-  otpStore: {
-    'pragnyayelisetti@gmail.com': '123456'
-  },
+  otpStore: {},
   emails: [],
   opportunities: [],
   notifications: [],
